@@ -17,6 +17,7 @@ import 'package:boom_board/features/simple_mode/domain/entities/animation/active
 import 'package:boom_board/features/simple_mode/domain/entities/simple_mode_player_entity.dart';
 import 'package:boom_board/features/simple_mode/presentation/controllers/simple_mode_controller.dart';
 import 'package:boom_board/gen/assets.gen.dart';
+import 'package:boom_board/routes/app_pages.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:get/get.dart';
@@ -32,68 +33,93 @@ class SimpleModeScreen extends GetView<SimpleModeController> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: retroBackground,
-      body: SafeArea(
-        child: LayoutBuilder(
-          builder: (context, constraints) {
-            // Wide/short viewport -> dashboard beside the board. Narrow/tall
-            // (phone portrait) -> dashboard stacked below the board instead,
-            // since a side-by-side split can't fit both regions there.
-            final isSideBySide = constraints.maxWidth >= constraints.maxHeight;
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, result) {
+        if (didPop) return;
+        _confirmLeaveRoom();
+      },
+      child: Scaffold(
+        backgroundColor: retroBackground,
+        body: SafeArea(
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              // Wide/short viewport -> dashboard beside the board. Narrow/tall
+              // (phone portrait) -> dashboard stacked below the board instead,
+              // since a side-by-side split can't fit both regions there.
+              final isSideBySide = constraints.maxWidth >= constraints.maxHeight;
 
-            if (isSideBySide) {
-              final dashboardWidth = clampedFraction(constraints.maxWidth, 0.3, min: 180, max: 340);
-              final tileSize = fluidTileSize(
-                constraints.maxWidth - dashboardWidth,
-                constraints.maxHeight,
-                gridUnits: 8 + _kLabelFraction,
-                chrome: _kBoardChrome,
-              );
+              if (isSideBySide) {
+                final dashboardWidth = clampedFraction(constraints.maxWidth, 0.3, min: 180, max: 340);
+                final tileSize = fluidTileSize(
+                  constraints.maxWidth - dashboardWidth,
+                  constraints.maxHeight,
+                  gridUnits: 8 + _kLabelFraction,
+                  chrome: _kBoardChrome,
+                );
 
-              return Row(
-                children: [
-                  // LEFT PANE: THE DASHBOARD
-                  Container(
-                    width: dashboardWidth,
-                    decoration: const BoxDecoration(
-                      border: Border(right: BorderSide(color: Colors.white, width: 4)),
-                    ),
-                    child: _buildDashboard(),
-                  ),
-
-                  // RIGHT PANE: THE ARENA
-                  Expanded(
-                    child: Center(
-                      child: _buildBoardArea(tileSize),
-                    ),
-                  ),
-                ],
-              );
-            } else {
-              final tileSize = fluidTileSize(
-                constraints.maxWidth,
-                double.infinity,
-                gridUnits: 8 + _kLabelFraction,
-                chrome: _kBoardChrome,
-              );
-
-              return Column(
-                children: [
-                  Center(child: _buildBoardArea(tileSize)),
-                  Expanded(
-                    child: Container(
+                return Row(
+                  children: [
+                    // LEFT PANE: THE DASHBOARD
+                    Container(
+                      width: dashboardWidth,
                       decoration: const BoxDecoration(
-                        border: Border(top: BorderSide(color: Colors.white, width: 4)),
+                        border: Border(right: BorderSide(color: Colors.white, width: 4)),
                       ),
                       child: _buildDashboard(),
                     ),
-                  ),
-                ],
-              );
-            }
-          },
+
+                    // RIGHT PANE: THE ARENA
+                    Expanded(
+                      child: Center(
+                        child: _buildBoardArea(tileSize),
+                      ),
+                    ),
+                  ],
+                );
+              } else {
+                final tileSize = fluidTileSize(
+                  constraints.maxWidth,
+                  double.infinity,
+                  gridUnits: 8 + _kLabelFraction,
+                  chrome: _kBoardChrome,
+                );
+
+                return Column(
+                  children: [
+                    Center(child: _buildBoardArea(tileSize)),
+                    Expanded(
+                      child: Container(
+                        decoration: const BoxDecoration(
+                          border: Border(top: BorderSide(color: Colors.white, width: 4)),
+                        ),
+                        child: _buildDashboard(),
+                      ),
+                    ),
+                  ],
+                );
+              }
+            },
+          ),
         ),
+      ),
+    );
+  }
+
+  // --- SHARED LEAVE-ROOM CONFIRMATION (X button + OS back/back-swipe) ---
+  void _confirmLeaveRoom() {
+    if (Get.isDialogOpen ?? false) return;
+
+    Get.dialog(
+      RetroDialog(
+        title: 'Leave the room?',
+        message: 'Are you sure you want to disconnect and leave the room?',
+        onCancel: () => Get.back(),
+        onConfirm: () {
+          Get.back();
+          controller.leaveRoom();
+          Get.offAllNamed(home);
+        },
       ),
     );
   }
@@ -120,20 +146,7 @@ class SimpleModeScreen extends GetView<SimpleModeController> {
                   RetroButton(
                     text: 'X',
                     color: retroRed,
-                    onPressed: () {
-                      Get.dialog(
-                        RetroDialog(
-                          title: 'Leave the room?',
-                          message: 'Are you sure you want to disconnect and leave the room?',
-                          onCancel: () => Get.back(),
-                          onConfirm: () {
-                            Get.back();
-                            controller.leaveRoom();
-                            Get.back();
-                          },
-                        ),
-                      );
-                    },
+                    onPressed: _confirmLeaveRoom,
                   ),
                   const SizedBox(width: 16),
                   Expanded(
