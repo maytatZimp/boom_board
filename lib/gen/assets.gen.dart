@@ -1,5 +1,3 @@
-// dart format width=80
-
 /// GENERATED CODE - DO NOT MODIFY BY HAND
 /// *****************************************************
 ///  FlutterGen
@@ -7,7 +5,7 @@
 
 // coverage:ignore-file
 // ignore_for_file: type=lint
-// ignore_for_file: deprecated_member_use,directives_ordering,implicit_dynamic_list_literal,unnecessary_import
+// ignore_for_file: directives_ordering,unnecessary_import,implicit_dynamic_list_literal,deprecated_member_use
 
 import 'package:flutter/widgets.dart';
 
@@ -44,6 +42,10 @@ class $AssetsImagesGen {
   AssetGenImage get fireSprite =>
       const AssetGenImage('assets/images/fire_sprite.png');
 
+  /// File path: assets/images/info_icon.png
+  AssetGenImage get infoIcon =>
+      const AssetGenImage('assets/images/info_icon.png');
+
   /// File path: assets/images/not_ready_icon.png
   AssetGenImage get notReadyIcon =>
       const AssetGenImage('assets/images/not_ready_icon.png');
@@ -70,25 +72,26 @@ class $AssetsImagesGen {
 
   /// List of all assets
   List<AssetGenImage> get values => [
-    bomb,
-    bombTarget,
-    clockIcon,
-    deadIcon,
-    disconnected,
-    explosion,
-    fire,
-    fireSprite,
-    notReadyIcon,
-    playerBlueWin,
-    playerRedWin,
-    readyIcon,
-    robotBlue,
-    robotRed,
-  ];
+        bomb,
+        bombTarget,
+        clockIcon,
+        deadIcon,
+        disconnected,
+        explosion,
+        fire,
+        fireSprite,
+        infoIcon,
+        notReadyIcon,
+        playerBlueWin,
+        playerRedWin,
+        readyIcon,
+        robotBlue,
+        robotRed
+      ];
 }
 
 class Assets {
-  const Assets._();
+  Assets._();
 
   static const $AssetsImagesGen images = $AssetsImagesGen();
 }
@@ -98,14 +101,12 @@ class AssetGenImage {
     this._assetName, {
     this.size,
     this.flavors = const {},
-    this.animation,
   });
 
   final String _assetName;
 
   final Size? size;
   final Set<String> flavors;
-  final AssetGenImageAnimation? animation;
 
   Image image({
     Key? key,
@@ -128,7 +129,7 @@ class AssetGenImage {
     bool gaplessPlayback = true,
     bool isAntiAlias = false,
     String? package,
-    FilterQuality filterQuality = FilterQuality.medium,
+    FilterQuality filterQuality = FilterQuality.low,
     int? cacheWidth,
     int? cacheHeight,
   }) {
@@ -160,23 +161,18 @@ class AssetGenImage {
     );
   }
 
-  ImageProvider provider({AssetBundle? bundle, String? package}) {
-    return AssetImage(_assetName, bundle: bundle, package: package);
+  ImageProvider provider({
+    AssetBundle? bundle,
+    String? package,
+  }) {
+    return AssetImage(
+      _assetName,
+      bundle: bundle,
+      package: package,
+    );
   }
 
   String get path => _assetName;
 
   String get keyName => _assetName;
-}
-
-class AssetGenImageAnimation {
-  const AssetGenImageAnimation({
-    required this.isAnimation,
-    required this.duration,
-    required this.frames,
-  });
-
-  final bool isAnimation;
-  final Duration duration;
-  final int frames;
 }

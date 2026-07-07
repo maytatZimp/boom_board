@@ -172,8 +172,10 @@ class SimpleModeScreen extends GetView<SimpleModeController> {
                   ),
                   if (isCompact) ...[
                     const SizedBox(width: 16),
-                    // TODO: swap 'P' text for an asset icon.
-                    RetroButton(text: 'P', onPressed: _openRosterAndLogSheet),
+                    RetroButton.icon(
+                      iconAsset: Assets.images.infoIcon.path,
+                      onPressed: _openRosterAndLogSheet,
+                    ),
                   ],
                 ],
               ),
