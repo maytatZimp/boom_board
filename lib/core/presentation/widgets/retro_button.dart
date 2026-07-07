@@ -2,7 +2,8 @@ import 'package:boom_board/core/style/app_colors.dart';
 import 'package:flutter/material.dart';
 
 class RetroButton extends StatefulWidget {
-  final String text;
+  final String? text;
+  final String? iconAsset;
   final VoidCallback? onPressed;
   final Color color;
   final Color? textColor;
@@ -13,7 +14,15 @@ class RetroButton extends StatefulWidget {
     required this.onPressed,
     this.color = retroPaleBlue,
     this.textColor,
-  });
+  }) : iconAsset = null;
+
+  const RetroButton.icon({
+    super.key,
+    required this.iconAsset,
+    required this.onPressed,
+    this.color = retroPaleBlue,
+    this.textColor,
+  }) : text = null;
 
   @override
   State<RetroButton> createState() => _RetroButtonState();
@@ -71,14 +80,22 @@ class _RetroButtonState extends State<RetroButton> {
               ),
             ],
           ),
-          child: Text(
-            widget.text,
-            textAlign: TextAlign.center,
-            style: TextStyle(
-              color: widget.textColor ?? Colors.black,
-              fontWeight: FontWeight.bold,
-              fontSize: 16,
-            ),
+          // FittedBox lets the label shrink instead of wrapping mid-word
+          // when the button sits in a narrow container (e.g. a slim
+          // dashboard on a small landscape phone).
+          child: FittedBox(
+            fit: BoxFit.scaleDown,
+            child: widget.iconAsset != null
+                ? Image.asset(widget.iconAsset!, width: 20, height: 20)
+                : Text(
+                    widget.text!,
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      color: widget.textColor ?? Colors.black,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 16,
+                    ),
+                  ),
           ),
         ),
       ),

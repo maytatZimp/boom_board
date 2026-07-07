@@ -17,8 +17,10 @@ class RetroTextField extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final fieldWidth = (MediaQuery.of(context).size.width - 32).clamp(200.0, 300.0);
+
     return Container(
-      width: 300,
+      width: fieldWidth,
       margin: const EdgeInsets.only(bottom: 16),
       decoration: BoxDecoration(
         color: Colors.white,

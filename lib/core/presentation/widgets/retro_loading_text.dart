@@ -43,17 +43,33 @@ class _RetroLoadingTextState extends State<RetroLoadingText> {
 
   @override
   Widget build(BuildContext context) {
-    // Generate a string with the correct number of dots
-    String dots = '.' * _dotCount;
-    // Pad the right side with invisible spaces so the text doesn't jump around
-    String displayDots = dots.padRight(3, ' ');
-
-    return Text(
-      '${widget.text}$displayDots',
-      style: TextStyle(
-        color: widget.color,
-        fontWeight: FontWeight.bold,
-        fontSize: widget.fontSize ?? 24,
+    // Always render all 3 dots so the text's width never changes; dots not
+    // yet "on" are painted transparent instead of being replaced by spaces,
+    // since trailing spaces don't count towards line-wrap width and would
+    // let the widget silently overflow until the 3-dot frame revealed it.
+    // FittedBox + maxLines/softWrap then guarantee it stays on one line even
+    // if it still doesn't fit, instead of wrapping and shifting layout below.
+    return FittedBox(
+      fit: BoxFit.scaleDown,
+      alignment: Alignment.centerLeft,
+      child: Text.rich(
+        TextSpan(
+          children: [
+            TextSpan(text: widget.text),
+            for (var i = 0; i < 3; i++)
+              TextSpan(
+                text: '.',
+                style: i < _dotCount ? null : const TextStyle(color: Colors.transparent),
+              ),
+          ],
+        ),
+        maxLines: 1,
+        softWrap: false,
+        style: TextStyle(
+          color: widget.color,
+          fontWeight: FontWeight.bold,
+          fontSize: widget.fontSize ?? 24,
+        ),
       ),
     );
   }
