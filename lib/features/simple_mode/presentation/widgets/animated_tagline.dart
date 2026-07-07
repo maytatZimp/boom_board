@@ -62,15 +62,24 @@ class AnimatedTagline extends StatelessWidget {
         }
 
         // 5. Layout the row with dots in between
-        return Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            buildAnimatedWord('HIDE', hideColor),
-            const Text('  >  ', style: TextStyle(color: dimColor, fontSize: 20)),
-            buildAnimatedWord('SURVIVE', surviveColor),
-            const Text('  >  ', style: TextStyle(color: dimColor, fontSize: 20)),
-            buildAnimatedWord('DESTROY', destroyColor),
-          ],
+        // Wrapped in FittedBox so the row shrinks to fit narrow (phone-width)
+        // screens instead of overflowing off both edges; it never scales up
+        // past its natural size, so desktop is unaffected.
+        return Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12),
+          child: FittedBox(
+            fit: BoxFit.scaleDown,
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                buildAnimatedWord('HIDE', hideColor),
+                const Text('  >  ', style: TextStyle(color: dimColor, fontSize: 20)),
+                buildAnimatedWord('SURVIVE', surviveColor),
+                const Text('  >  ', style: TextStyle(color: dimColor, fontSize: 20)),
+                buildAnimatedWord('DESTROY', destroyColor),
+              ],
+            ),
+          ),
         );
       },
     );

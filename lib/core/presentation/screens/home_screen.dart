@@ -3,6 +3,7 @@ import 'package:boom_board/core/presentation/models/enums/home_panel_type.dart';
 import 'package:boom_board/core/presentation/widgets/home_background_anim.dart';
 import 'package:boom_board/core/presentation/widgets/host_panel.dart';
 import 'package:boom_board/core/presentation/widgets/join_panel.dart';
+import 'package:boom_board/core/presentation/utils/responsive.dart';
 import 'package:boom_board/core/presentation/widgets/retro_loading_text.dart';
 import 'package:boom_board/core/presentation/widgets/start_panel.dart';
 import 'package:boom_board/core/style/app_colors.dart';
@@ -15,6 +16,8 @@ class HomeScreen extends GetView<HomeController> {
 
   @override
   Widget build(BuildContext context) {
+    final logoFontSize = clampedFraction(MediaQuery.of(context).size.width, 0.11, min: 32, max: 48);
+
     return Scaffold(
       backgroundColor: retroBackground,
       body: Stack(
@@ -44,15 +47,15 @@ class HomeScreen extends GetView<HomeController> {
                       color: Colors.black,
                       border: Border.all(color: Colors.white, width: 4),
                     ),
-                    child: const Text(
+                    child: Text(
                       'BOOM\nBOARD',
                       textAlign: TextAlign.center,
                       style: TextStyle(
                         color: Colors.white,
                         fontWeight: FontWeight.w900,
-                        fontSize: 48,
+                        fontSize: logoFontSize,
                         height: 1.1,
-                        letterSpacing: 4,
+                        letterSpacing: logoFontSize / 12,
                       ),
                     ),
                   ),

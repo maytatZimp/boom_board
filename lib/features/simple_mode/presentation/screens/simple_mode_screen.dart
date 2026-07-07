@@ -1,6 +1,7 @@
 import 'dart:math' as math;
 
 import 'package:boom_board/core/data/models/coordinate.dart';
+import 'package:boom_board/core/presentation/utils/responsive.dart';
 import 'package:boom_board/core/presentation/widgets/retro_button.dart';
 import 'package:boom_board/core/presentation/widgets/retro_dialog.dart';
 import 'package:boom_board/core/presentation/widgets/retro_loading_text.dart';
@@ -23,268 +24,318 @@ import 'package:get/get.dart';
 class SimpleModeScreen extends GetView<SimpleModeController> {
   const SimpleModeScreen({super.key});
 
+  // Label gutters are half a tile wide; the grid border adds 8px (4px each
+  // side) that must be subtracted from the width budget or the board
+  // overflows on narrow screens.
+  static const double _kLabelFraction = 0.5;
+  static const double _kBoardChrome = 8;
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: retroBackground,
-      body: Row(
-        children: [
-          // ==========================================
-          // LEFT PANE: THE DASHBOARD (30% Width)
-          // ==========================================
-          Container(
-            width: Get.width * 0.3,
-            decoration: const BoxDecoration(
-              border: Border(right: BorderSide(color: Colors.white, width: 4)),
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                // --- HEADER (Leave room & Room Code) ---
-                Padding(
-                  padding: const EdgeInsets.all(16.0),
-                  child: Row(
-                    children: [
-                      RetroButton(
-                        text: 'X',
-                        color: retroRed,
-                        onPressed: () {
-                          Get.dialog(
-                            RetroDialog(
-                              title: 'Leave the room?',
-                              message: 'Are you sure you want to disconnect and leave the room?',
-                              onCancel: () => Get.back(),
-                              onConfirm: () {
-                                Get.back();
-                                controller.leaveRoom();
-                                Get.back();
-                              },
-                            ),
-                          );
-                        },
-                      ),
-                      const SizedBox(width: 16),
-                      Expanded(
-                        child: RetroButton(
-                          text: 'Code\n${controller.roomCode}',
-                          color: retroCyan,
-                          onPressed: () async {
-                            // Copy to clipboard
-                            await Clipboard.setData(ClipboardData(text: controller.roomCode));
+      body: SafeArea(
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            // Wide/short viewport -> dashboard beside the board. Narrow/tall
+            // (phone portrait) -> dashboard stacked below the board instead,
+            // since a side-by-side split can't fit both regions there.
+            final isSideBySide = constraints.maxWidth >= constraints.maxHeight;
 
-                            // Show a quick retro snackbar feedback
-                            Get.snackbar(
-                              'Copied!',
-                              'Room code copied to clipboard.',
-                              backgroundColor: retroGreen,
-                              colorText: Colors.black,
-                              snackPosition: SnackPosition.BOTTOM,
-                              margin: const EdgeInsets.all(16),
-                              duration: const Duration(seconds: 2),
-                            );
-                          },
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
+            if (isSideBySide) {
+              final dashboardWidth = clampedFraction(constraints.maxWidth, 0.3, min: 180, max: 340);
+              final tileSize = fluidTileSize(
+                constraints.maxWidth - dashboardWidth,
+                constraints.maxHeight,
+                gridUnits: 8 + _kLabelFraction,
+                chrome: _kBoardChrome,
+              );
 
-                // --- PHASE BANNER ---
-                Container(
-                  color: retroGrey,
-                  padding: const EdgeInsets.symmetric(vertical: 8),
-                  child: GetBuilder<SimpleModeController>(
-                    id: SimpleModeIds.controlPanel,
-                    builder: (ctl) {
-                      return Column(
-                        children: [
-                          if (ctl.currentState != GameState.lobby &&
-                              ctl.currentState != GameState.end &&
-                              ctl.currentState != GameState.process)
-                            Text.rich(
-                              TextSpan(
-                                children: [
-                                  // Only show the Round count if the game is actually running
-                                  if (ctl.currentState != GameState.lobby && ctl.currentState != GameState.end)
-                                    TextSpan(
-                                      text: 'ROUND ${ctl.currentRound}\n',
-                                      style: const TextStyle(
-                                        color: retroYellow, // Make the round pop!
-                                        fontSize: 24,
-                                        height: 1.5,
-                                      ),
-                                    ),
-                                  TextSpan(
-                                    text: ctl.getPhaseText(),
-                                    style: const TextStyle(
-                                      color: Colors.white,
-                                      fontSize: 16,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                              textAlign: TextAlign.center,
-                            ),
-                          // TIMER COUNTDOWN (Only in active phases)
-                          if (ctl.currentState == GameState.position || ctl.currentState == GameState.attack)
-                            _buildTimerBar(ctl),
-                          if (ctl.currentState == GameState.process)
-                            Center(
-                              child: RetroLoadingText(
-                                text: 'Loading',
-                                color: Colors.white,
-                                fontSize: 20,
-                              ),
-                            ),
-                          // LOBBY CONTROLS (Start Game)
-                          if (ctl.currentState == GameState.lobby) ...[
-                            if (ctl.isHost)
-                              RetroButton(
-                                text: ctl.playerList.length > 1 ? 'Start game' : 'Need players',
-                                color: retroGreen,
-                                onPressed: ctl.playerList.length > 1 ? controller.startGame : null,
-                              )
-                            else
-                              Padding(
-                                padding: const EdgeInsets.only(left: 8),
-                                child: const RetroLoadingText(
-                                  text: 'Waiting for host',
-                                  color: retroYellow,
-                                  fontSize: 20,
-                                ),
-                              ),
-                          ],
-
-                          // ENDGAME CONTROLS (Play Again)
-                          if (ctl.currentState == GameState.end) ...[
-                            if (ctl.isHost)
-                              RetroButton(
-                                text: 'Play again',
-                                color: retroGreen,
-                                onPressed: controller.backToLobby,
-                              )
-                            else
-                              Padding(
-                                padding: const EdgeInsets.only(left: 8),
-                                child: const RetroLoadingText(
-                                  text: 'Waiting for host',
-                                  color: retroYellow,
-                                  fontSize: 20,
-                                ),
-                              ),
-                            if (ctl.isHost) const SizedBox(height: 4),
-                            const SizedBox(height: 8),
-                            RetroButton(
-                              text: ctl.showEndgameOverlay ? 'HIDE RESULTS' : 'SHOW RESULTS',
-                              color: retroBackground, // Makes it look like an outlined secondary button
-                              onPressed: controller.toggleEndgameOverlay,
-                              textColor: retroLightGrey,
-                            ),
-                            const SizedBox(height: 4),
-                          ],
-                        ],
-                      );
-                    },
-                  ),
-                ),
-
-                // --- PLAYER ROSTER ---
-                Expanded(
-                  flex: 3,
-                  child: GetBuilder<SimpleModeController>(
-                    id: SimpleModeIds.playerListPanel,
-                    builder: (ctl) {
-                      return ListView.builder(
-                        padding: const EdgeInsets.all(16),
-                        itemCount: ctl.playerList.length,
-                        itemBuilder: (context, index) {
-                          final player = ctl.playerList[index];
-
-                          // Dead players get a dark red background, alive players get black
-                          final backgroundColor = player.isAlive ? Colors.black : retroRed.withAlpha(51);
-
-                          return Container(
-                            margin: const EdgeInsets.only(bottom: 8),
-                            padding: const EdgeInsets.all(12),
-                            decoration: BoxDecoration(
-                              color: backgroundColor,
-                              border: Border.all(
-                                color: player.id == controller.hostId ? retroYellow : Colors.white,
-                                width: 2,
-                              ),
-                            ),
-                            child: Row(
-                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                              children: [
-                                // Player Name
-                                Expanded(
-                                  child: Text(
-                                    player.name,
-                                    style: TextStyle(
-                                      // Dim the text if they are dead or disconnected
-                                      color: (player.isAlive && !player.isDisconnected) ? Colors.white : Colors.grey,
-                                      fontSize: 16,
-                                    ),
-                                    overflow: TextOverflow.ellipsis,
-                                  ),
-                                ),
-
-                                // The Dynamic Status Icon
-                                _buildPlayerStatusIcon(player, ctl.currentState),
-                              ],
-                            ),
-                          );
-                        },
-                      );
-                    },
-                  ),
-                ),
-
-                // --- ACTION LOG (Terminal) ---
-                Expanded(
-                  flex: 2,
-                  child: Container(
+              return Row(
+                children: [
+                  // LEFT PANE: THE DASHBOARD
+                  Container(
+                    width: dashboardWidth,
                     decoration: const BoxDecoration(
-                      color: Colors.black,
-                      border: Border(top: BorderSide(color: Colors.white, width: 4)),
+                      border: Border(right: BorderSide(color: Colors.white, width: 4)),
                     ),
-                    padding: const EdgeInsets.all(8),
-                    child: GetBuilder<SimpleModeController>(
-                      id: SimpleModeIds.actionLogPanel,
-                      builder: (ctl) {
-                        return ListView.builder(
-                          controller: ctl.logScrollController,
-                          itemCount: ctl.actionLogList.length,
-                          itemBuilder: (context, index) {
-                            return _buildLogEntry(ctl.actionLogList[index]);
-                          },
-                        );
-                      },
+                    child: _buildDashboard(),
+                  ),
+
+                  // RIGHT PANE: THE ARENA
+                  Expanded(
+                    child: Center(
+                      child: _buildBoardArea(tileSize),
                     ),
                   ),
-                ),
-              ],
-            ),
-          ),
+                ],
+              );
+            } else {
+              final tileSize = fluidTileSize(
+                constraints.maxWidth,
+                double.infinity,
+                gridUnits: 8 + _kLabelFraction,
+                chrome: _kBoardChrome,
+              );
 
-          // ==========================================
-          // RIGHT PANE: THE ARENA (70% Width)
-          // ==========================================
-          Expanded(
-            child: Center(
-              child: _buildBoardArea(),
-            ),
-          ),
-        ],
+              return Column(
+                children: [
+                  Center(child: _buildBoardArea(tileSize)),
+                  Expanded(
+                    child: Container(
+                      decoration: const BoxDecoration(
+                        border: Border(top: BorderSide(color: Colors.white, width: 4)),
+                      ),
+                      child: _buildDashboard(),
+                    ),
+                  ),
+                ],
+              );
+            }
+          },
+        ),
       ),
     );
   }
 
+  // --- THE DASHBOARD (leave/room-code header, phase banner, roster, action log) ---
+  Widget _buildDashboard() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        // --- HEADER (Leave room & Room Code) ---
+        Padding(
+          padding: const EdgeInsets.all(16.0),
+          child: Row(
+            children: [
+              RetroButton(
+                text: 'X',
+                color: retroRed,
+                onPressed: () {
+                  Get.dialog(
+                    RetroDialog(
+                      title: 'Leave the room?',
+                      message: 'Are you sure you want to disconnect and leave the room?',
+                      onCancel: () => Get.back(),
+                      onConfirm: () {
+                        Get.back();
+                        controller.leaveRoom();
+                        Get.back();
+                      },
+                    ),
+                  );
+                },
+              ),
+              const SizedBox(width: 16),
+              Expanded(
+                child: RetroButton(
+                  text: 'Code\n${controller.roomCode}',
+                  color: retroCyan,
+                  onPressed: () async {
+                    // Copy to clipboard
+                    await Clipboard.setData(ClipboardData(text: controller.roomCode));
+
+                    // Show a quick retro snackbar feedback
+                    Get.snackbar(
+                      'Copied!',
+                      'Room code copied to clipboard.',
+                      backgroundColor: retroGreen,
+                      colorText: Colors.black,
+                      snackPosition: SnackPosition.BOTTOM,
+                      margin: const EdgeInsets.all(16),
+                      duration: const Duration(seconds: 2),
+                    );
+                  },
+                ),
+              ),
+            ],
+          ),
+        ),
+
+        // --- PHASE BANNER ---
+        Container(
+          color: retroGrey,
+          padding: const EdgeInsets.symmetric(vertical: 8),
+          child: GetBuilder<SimpleModeController>(
+            id: SimpleModeIds.controlPanel,
+            builder: (ctl) {
+              return Column(
+                children: [
+                  if (ctl.currentState != GameState.lobby &&
+                      ctl.currentState != GameState.end &&
+                      ctl.currentState != GameState.process)
+                    Text.rich(
+                      TextSpan(
+                        children: [
+                          // Only show the Round count if the game is actually running
+                          if (ctl.currentState != GameState.lobby && ctl.currentState != GameState.end)
+                            TextSpan(
+                              text: 'ROUND ${ctl.currentRound}\n',
+                              style: const TextStyle(
+                                color: retroYellow, // Make the round pop!
+                                fontSize: 24,
+                                height: 1.5,
+                              ),
+                            ),
+                          TextSpan(
+                            text: ctl.getPhaseText(),
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 16,
+                            ),
+                          ),
+                        ],
+                      ),
+                      textAlign: TextAlign.center,
+                    ),
+                  // TIMER COUNTDOWN (Only in active phases)
+                  if (ctl.currentState == GameState.position || ctl.currentState == GameState.attack)
+                    _buildTimerBar(ctl),
+                  if (ctl.currentState == GameState.process)
+                    Center(
+                      child: RetroLoadingText(
+                        text: 'Loading',
+                        color: Colors.white,
+                        fontSize: 20,
+                      ),
+                    ),
+                  // LOBBY CONTROLS (Start Game)
+                  if (ctl.currentState == GameState.lobby) ...[
+                    if (ctl.isHost)
+                      RetroButton(
+                        text: ctl.playerList.length > 1 ? 'Start game' : 'Need players',
+                        color: retroGreen,
+                        onPressed: ctl.playerList.length > 1 ? controller.startGame : null,
+                      )
+                    else
+                      Padding(
+                        padding: const EdgeInsets.only(left: 8),
+                        child: const RetroLoadingText(
+                          text: 'Waiting for host',
+                          color: retroYellow,
+                          fontSize: 20,
+                        ),
+                      ),
+                  ],
+
+                  // ENDGAME CONTROLS (Play Again)
+                  if (ctl.currentState == GameState.end) ...[
+                    if (ctl.isHost)
+                      RetroButton(
+                        text: 'Play again',
+                        color: retroGreen,
+                        onPressed: controller.backToLobby,
+                      )
+                    else
+                      Padding(
+                        padding: const EdgeInsets.only(left: 8),
+                        child: const RetroLoadingText(
+                          text: 'Waiting for host',
+                          color: retroYellow,
+                          fontSize: 20,
+                        ),
+                      ),
+                    if (ctl.isHost) const SizedBox(height: 4),
+                    const SizedBox(height: 8),
+                    RetroButton(
+                      text: ctl.showEndgameOverlay ? 'HIDE RESULTS' : 'SHOW RESULTS',
+                      color: retroBackground, // Makes it look like an outlined secondary button
+                      onPressed: controller.toggleEndgameOverlay,
+                      textColor: retroLightGrey,
+                    ),
+                    const SizedBox(height: 4),
+                  ],
+                ],
+              );
+            },
+          ),
+        ),
+
+        // --- PLAYER ROSTER ---
+        Expanded(
+          flex: 3,
+          child: GetBuilder<SimpleModeController>(
+            id: SimpleModeIds.playerListPanel,
+            builder: (ctl) {
+              return ListView.builder(
+                padding: const EdgeInsets.all(16),
+                itemCount: ctl.playerList.length,
+                itemBuilder: (context, index) {
+                  final player = ctl.playerList[index];
+
+                  // Dead players get a dark red background, alive players get black
+                  final backgroundColor = player.isAlive ? Colors.black : retroRed.withAlpha(51);
+
+                  return Container(
+                    margin: const EdgeInsets.only(bottom: 8),
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: backgroundColor,
+                      border: Border.all(
+                        color: player.id == controller.hostId ? retroYellow : Colors.white,
+                        width: 2,
+                      ),
+                    ),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        // Player Name
+                        Expanded(
+                          child: Text(
+                            player.name,
+                            style: TextStyle(
+                              // Dim the text if they are dead or disconnected
+                              color: (player.isAlive && !player.isDisconnected) ? Colors.white : Colors.grey,
+                              fontSize: 16,
+                            ),
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+
+                        // The Dynamic Status Icon
+                        _buildPlayerStatusIcon(player, ctl.currentState),
+                      ],
+                    ),
+                  );
+                },
+              );
+            },
+          ),
+        ),
+
+        // --- ACTION LOG (Terminal) ---
+        Expanded(
+          flex: 2,
+          child: Container(
+            decoration: const BoxDecoration(
+              color: Colors.black,
+              border: Border(top: BorderSide(color: Colors.white, width: 4)),
+            ),
+            padding: const EdgeInsets.all(8),
+            child: GetBuilder<SimpleModeController>(
+              id: SimpleModeIds.actionLogPanel,
+              builder: (ctl) {
+                return ListView.builder(
+                  controller: ctl.logScrollController,
+                  itemCount: ctl.actionLogList.length,
+                  itemBuilder: (context, index) {
+                    return _buildLogEntry(ctl.actionLogList[index]);
+                  },
+                );
+              },
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
   // --- THE 8x8 BOARD BUILDER ---
-  Widget _buildBoardArea() {
+  Widget _buildBoardArea(double tileSize) {
     const columns = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H'];
     const rows = ['1', '2', '3', '4', '5', '6', '7', '8'];
-    const double tileSize = 60.0; // Size of each grid square
+    final labelSize = tileSize * _kLabelFraction;
+    final labelFontSize = (labelSize * 0.8).clamp(12.0, 24.0);
 
     return Column(
       mainAxisSize: MainAxisSize.min,
@@ -295,12 +346,16 @@ class SimpleModeScreen extends GetView<SimpleModeController> {
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const SizedBox(width: tileSize), // Corner spacer
+              SizedBox(width: labelSize, height: labelSize), // Corner spacer
               ...columns.map(
                 (c) => SizedBox(
                   width: tileSize,
+                  height: labelSize,
                   child: Center(
-                    child: Text(c, style: const TextStyle(color: Colors.grey, fontSize: 24)),
+                    child: Text(
+                      c,
+                      style: TextStyle(color: Colors.grey, fontSize: labelFontSize),
+                    ),
                   ),
                 ),
               ),
@@ -318,9 +373,12 @@ class SimpleModeScreen extends GetView<SimpleModeController> {
                   .map(
                     (r) => SizedBox(
                       height: tileSize,
-                      width: tileSize,
+                      width: labelSize,
                       child: Center(
-                        child: Text(r, style: const TextStyle(color: Colors.grey, fontSize: 24)),
+                        child: Text(
+                          r,
+                          style: TextStyle(color: Colors.grey, fontSize: labelFontSize),
+                        ),
                       ),
                     ),
                   )
@@ -357,6 +415,7 @@ class SimpleModeScreen extends GetView<SimpleModeController> {
                             final x = index % 8;
                             final y = index ~/ 8;
                             final isDark = (x + y) % 2 == 1;
+                            final iconSize = tileSize * (32 / 60);
 
                             // Check tile states
                             final isDestroyed = ctl.destroyedTile.any((t) => t.x == x && t.y == y);
@@ -404,17 +463,17 @@ class SimpleModeScreen extends GetView<SimpleModeController> {
                                           imagePath: $AssetsImagesGen().fireSprite.path,
                                           frameCount: 10,
                                           duration: Duration(seconds: 1),
-                                          width: 60,
-                                          height: 60,
+                                          width: tileSize,
+                                          height: tileSize,
                                         ),
 
                                       // --- LOCKED TARGET EFFECT ---
                                       if (isLockedTarget)
                                         Opacity(
                                           opacity: 0.5,
-                                          child: const $AssetsImagesGen().bombTarget.image(
-                                            width: 32,
-                                            height: 32,
+                                          child: $AssetsImagesGen().bombTarget.image(
+                                            width: iconSize,
+                                            height: iconSize,
                                           ),
                                         ),
 
@@ -422,15 +481,15 @@ class SimpleModeScreen extends GetView<SimpleModeController> {
                                       if (isHovered && canInteract)
                                         if (isPositionPhase)
                                           // Ghost Character (position Phase)
-                                          const $AssetsImagesGen().robotBlue.image(
-                                            width: 32,
-                                            height: 32,
+                                          $AssetsImagesGen().robotBlue.image(
+                                            width: iconSize,
+                                            height: iconSize,
                                           )
                                         else if (isAttackPhase)
                                           // Target reticle (Bomb Phase)
-                                          const $AssetsImagesGen().bombTarget.image(
-                                            width: 32,
-                                            height: 32,
+                                          $AssetsImagesGen().bombTarget.image(
+                                            width: iconSize,
+                                            height: iconSize,
                                           ),
                                     ],
                                   ),
@@ -797,15 +856,16 @@ class SimpleModeScreen extends GetView<SimpleModeController> {
           currentY = skyStartY + ((targetPixelY - skyStartY) * progress);
         }
 
+        final iconSize = tileSize * (32 / 60);
         return Positioned(
           left: currentX,
           top: currentY,
           width: tileSize,
           height: tileSize,
           child: Center(
-            child: const $AssetsImagesGen().bomb.image(
-              width: 32,
-              height: 32,
+            child: $AssetsImagesGen().bomb.image(
+              width: iconSize,
+              height: iconSize,
             ),
           ),
         );
@@ -821,9 +881,9 @@ class SimpleModeScreen extends GetView<SimpleModeController> {
       top: anim.y * tileSize,
       width: tileSize,
       height: tileSize,
-      child: const $AssetsImagesGen().explosion.image(
-        width: 60,
-        height: 60,
+      child: $AssetsImagesGen().explosion.image(
+        width: tileSize,
+        height: tileSize,
         fit: BoxFit.fitWidth,
       ),
     );
@@ -834,6 +894,7 @@ class SimpleModeScreen extends GetView<SimpleModeController> {
     final targetX = anim.x * tileSize;
     final startY = anim.y * tileSize;
     final targetY = startY - (tileSize * 1.5);
+    final iconSize = tileSize * (32 / 60);
 
     return TweenAnimationBuilder<double>(
       key: ValueKey(anim.id),
@@ -852,9 +913,9 @@ class SimpleModeScreen extends GetView<SimpleModeController> {
           child: Opacity(
             opacity: currentOpacity,
             child: Center(
-              child: const $AssetsImagesGen().deadIcon.image(
-                width: 32,
-                height: 32,
+              child: $AssetsImagesGen().deadIcon.image(
+                width: iconSize,
+                height: iconSize,
               ),
             ),
           ),
@@ -924,6 +985,7 @@ class SimpleModeScreen extends GetView<SimpleModeController> {
       return const SizedBox.shrink();
     }
 
+    final iconSize = tileSize * (32 / 60);
     return Positioned(
       left: player.x! * tileSize,
       top: player.y! * tileSize,
@@ -932,9 +994,9 @@ class SimpleModeScreen extends GetView<SimpleModeController> {
       child: Opacity(
         opacity: 0.5, // Stealth mode
         child: Center(
-          child: const $AssetsImagesGen().robotBlue.image(
-            width: 32,
-            height: 32,
+          child: $AssetsImagesGen().robotBlue.image(
+            width: iconSize,
+            height: iconSize,
           ),
         ),
       ),
@@ -981,6 +1043,7 @@ class SimpleModeScreen extends GetView<SimpleModeController> {
           }
         }
 
+        final iconSize = tileSize * (32 / 60);
         return Positioned(
           left: currentX * tileSize,
           top: currentY * tileSize,
@@ -990,13 +1053,13 @@ class SimpleModeScreen extends GetView<SimpleModeController> {
             opacity: currentOpacity,
             child: Center(
               child: anim.isLocal
-                  ? const $AssetsImagesGen().robotBlue.image(
-                      width: 32,
-                      height: 32,
+                  ? $AssetsImagesGen().robotBlue.image(
+                      width: iconSize,
+                      height: iconSize,
                     )
-                  : const $AssetsImagesGen().robotRed.image(
-                      width: 32,
-                      height: 32,
+                  : $AssetsImagesGen().robotRed.image(
+                      width: iconSize,
+                      height: iconSize,
                     ),
             ),
           ),
@@ -1057,6 +1120,8 @@ class SimpleModeScreen extends GetView<SimpleModeController> {
 
   Widget _buildWinnerPlayer(SimpleModeController ctl, double tileSize) {
     bool isLocalPlayerWin = ctl.localPlayer?.isAlive ?? false;
+    final iconWidth = tileSize * (32 / 60);
+    final iconHeight = tileSize * (64 / 60);
     // Check if the winner position exists!
     if (ctl.winnerPosition != null) {
       return TweenAnimationBuilder<double>(
@@ -1082,13 +1147,13 @@ class SimpleModeScreen extends GetView<SimpleModeController> {
         },
         // The actual widget you want to show (e.g., a trophy or a glowing box)
         child: isLocalPlayerWin
-            ? const $AssetsImagesGen().playerBlueWin.image(
-                width: 32,
-                height: 64,
+            ? $AssetsImagesGen().playerBlueWin.image(
+                width: iconWidth,
+                height: iconHeight,
               )
-            : const $AssetsImagesGen().playerRedWin.image(
-                width: 32,
-                height: 64,
+            : $AssetsImagesGen().playerRedWin.image(
+                width: iconWidth,
+                height: iconHeight,
               ),
       );
     } else {

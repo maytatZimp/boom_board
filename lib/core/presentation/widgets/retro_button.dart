@@ -71,13 +71,19 @@ class _RetroButtonState extends State<RetroButton> {
               ),
             ],
           ),
-          child: Text(
-            widget.text,
-            textAlign: TextAlign.center,
-            style: TextStyle(
-              color: widget.textColor ?? Colors.black,
-              fontWeight: FontWeight.bold,
-              fontSize: 16,
+          // FittedBox lets the label shrink instead of wrapping mid-word
+          // when the button sits in a narrow container (e.g. a slim
+          // dashboard on a small landscape phone).
+          child: FittedBox(
+            fit: BoxFit.scaleDown,
+            child: Text(
+              widget.text,
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                color: widget.textColor ?? Colors.black,
+                fontWeight: FontWeight.bold,
+                fontSize: 16,
+              ),
             ),
           ),
         ),
