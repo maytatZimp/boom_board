@@ -143,7 +143,7 @@ class HomeScreen extends GetView<HomeController> {
             bottom: 16,
             right: 16,
             child: Text(
-              'v0.1.0',
+              'v0.1.1',
               style: TextStyle(
                 color: Colors.white.withAlpha(128),
                 fontWeight: FontWeight.bold,
