@@ -57,6 +57,7 @@ class SimpleModeController extends GetxController {
   Coordinate? lockedBombTarget;
   Coordinate? winnerPosition;
   bool showEndgameOverlay = true;
+  bool hideLocalPlayerIcon = false;
   List<SimpleModeResultEntity> finalRanking = [];
   int currentPhaseTimeLimit = 0;
   String currentTimerKey = '';
@@ -503,6 +504,12 @@ class SimpleModeController extends GetxController {
   void toggleEndgameOverlay() {
     showEndgameOverlay = !showEndgameOverlay;
     // We update both the board (to hide the overlay) and the control panel (to change the button text)
+    update([SimpleModeIds.boardPanel, SimpleModeIds.controlPanel]);
+  }
+
+  void toggleHideLocalPlayerIcon() {
+    hideLocalPlayerIcon = !hideLocalPlayerIcon;
+    // We update both the board (to hide the icon) and the control panel (to change the button text)
     update([SimpleModeIds.boardPanel, SimpleModeIds.controlPanel]);
   }
 
