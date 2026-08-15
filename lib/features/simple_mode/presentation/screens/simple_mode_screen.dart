@@ -218,8 +218,16 @@ class SimpleModeScreen extends GetView<SimpleModeController> {
                           textAlign: TextAlign.center,
                         ),
                       // TIMER COUNTDOWN (Only in active phases)
-                      if (ctl.currentState == GameState.position || ctl.currentState == GameState.attack)
+                      if (ctl.currentState == GameState.position || ctl.currentState == GameState.attack) ...[
                         _buildTimerBar(ctl),
+                        const SizedBox(height: 8),
+                        RetroButton(
+                          text: ctl.hideLocalPlayerIcon ? 'UNHIDE' : 'HIDE',
+                          color: retroBackground,
+                          textColor: retroLightGrey,
+                          onPressed: controller.toggleHideLocalPlayerIcon,
+                        ),
+                      ],
                       if (ctl.currentState == GameState.process)
                         Center(
                           child: RetroLoadingText(
@@ -1046,7 +1054,8 @@ class SimpleModeScreen extends GetView<SimpleModeController> {
         player.x == null ||
         player.y == null ||
         !player.hasPositioned ||
-        ctl.currentState == GameState.end) {
+        ctl.currentState == GameState.end ||
+        ctl.hideLocalPlayerIcon) {
       return const SizedBox.shrink();
     }
 
