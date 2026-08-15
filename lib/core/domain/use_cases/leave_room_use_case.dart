@@ -18,10 +18,16 @@ class LeaveRoomUseCase {
   });
 
   Future<void> call(LeaveRoomParams params) async {
-    await roomServerRepository.leaveRoom();
-
-    if (params.gameMode == GameMode.simple) {
-      simpleModeSocketHandler.dispose();
+    try {
+      await roomServerRepository.leaveRoom();
+    } finally {
+      // Unbind locally even when the server call failed. Callers only log the
+      // error and leave the room anyway, so keeping the handlers bound would
+      // double-register them on the next createRoom/joinRoom -- socket.on()
+      // appends, so every server event would then be handled twice.
+      if (params.gameMode == GameMode.simple) {
+        simpleModeSocketHandler.dispose();
+      }
     }
   }
 }

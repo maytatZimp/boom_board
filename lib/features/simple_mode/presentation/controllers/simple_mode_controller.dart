@@ -181,7 +181,8 @@ class SimpleModeController extends GetxController {
     SimpleModePlayerEntity? rollbackPlayerData;
     try {
       if (localPlayer?.hasPositioned == true) return;
-      if (x > 8 || y > 8 || x < 0 || y < 0) return;
+      // The board is 8x8 with indices 0..7, so 8 is off-board.
+      if (x > 7 || y > 7 || x < 0 || y < 0) return;
 
       // Optimistic UI update: instantly hide the hover effect
       setHoveredTile(null);
@@ -214,6 +215,9 @@ class SimpleModeController extends GetxController {
   void throwBomb(int x, int y) async {
     try {
       if (localPlayer?.hasThrowBomb == true) return;
+      // The board is 8x8 with indices 0..7, so 8 is off-board. Same guard as
+      // setPosition -- one tap handler feeds both, so they validate alike.
+      if (x > 7 || y > 7 || x < 0 || y < 0) return;
 
       setHoveredTile(null);
 
