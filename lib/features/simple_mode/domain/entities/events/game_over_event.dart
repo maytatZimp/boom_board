@@ -3,11 +3,13 @@ import 'package:boom_board/features/simple_mode/domain/entities/simple_mode_resu
 
 class GameOverEvent {
   final List<SimpleModeResultEntity> ranking;
-  final Coordinate winnerPosition;
+  // Null when the game ended with no living winner (e.g. every remaining
+  // player left/died), so the client must tolerate its absence.
+  final Coordinate? winnerPosition;
 
   GameOverEvent({
     required this.ranking,
-    required this.winnerPosition,
+    this.winnerPosition,
   });
 
   @override

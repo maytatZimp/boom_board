@@ -14,12 +14,23 @@ import 'package:socket_io_client/socket_io_client.dart' as io;
 
 class SocketService {
   late io.Socket socket;
+  bool _isInitialized = false;
 
   Logger get logger {
     return GetIt.I<Logger>();
   }
 
   void connectToServer() {
+    // If a live connection already exists (e.g. returning to the home screen
+    // after leaving a room), don't rebuild the socket. The underlying
+    // connection is still up, so a fresh `onConnect` would never fire and the
+    // caller would wait forever. Just re-announce the connected state.
+    if (_isInitialized && socket.connected) {
+      logger.d('Socket already connected, re-firing SocketConnectedEvent.');
+      eventBus.fire(SocketConnectedEvent());
+      return;
+    }
+
     socket = io.io(
       backendUrl,
       io.OptionBuilder()
@@ -30,6 +41,7 @@ class SocketService {
           .build(),
     );
 
+    _isInitialized = true;
     socket.connect();
 
     socket.onConnect((_) {
