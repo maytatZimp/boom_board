@@ -38,6 +38,15 @@ class SimpleModeSocketHandler {
   SimpleModeSocketHandler({required this.socketService});
 
   void init() {
+    // Rebind from a clean slate. socket.on() appends and there is a single
+    // long-lived io.Socket for the whole app, so any bind left over from a
+    // previous room would survive into this one and make every server event
+    // fire twice -- duplicate action-log entries, double-applied player
+    // mutations. Leftovers are easy to produce: leaveRoom() throws whenever
+    // the socket is down, and a connection drop navigates home without going
+    // through LeaveRoomUseCase at all. Unbinding here covers every route in.
+    dispose();
+
     socketService.socket.on('playerJoined', onPlayerJoined);
 
     socketService.socket.on('playerLeft', onPlayerLeft);
