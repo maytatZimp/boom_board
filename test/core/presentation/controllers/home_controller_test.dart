@@ -227,16 +227,18 @@ void main() {
       expect(await errorFor('ROOM_NOT_FOUND'), 'Room ABCD not found');
     });
 
-    test('maps GAME_ALREADY_STARTED', () async {
-      expect(await errorFor('GAME_ALREADY_STARTED'), 'Game already started. Please wait');
-    });
-
     test('maps ROOM_IS_FULL', () async {
       expect(await errorFor('ROOM_IS_FULL'), 'Room is full');
     });
 
-    test('maps PLAYER_ALREADY_IN_ROOM', () async {
-      expect(await errorFor('PLAYER_ALREADY_IN_ROOM'), 'You are already in this room');
+    test('maps ROOM_IS_FULL_OF_SPECTATORS', () async {
+      expect(await errorFor('ROOM_IS_FULL_OF_SPECTATORS'), 'Room has too many spectators');
+    });
+
+    test('maps SECRET_MISMATCH', () async {
+      // The stale slot has already been cleared by the use case, so the advice
+      // to retry is real: the next attempt enters as a brand-new player.
+      expect(await errorFor('SECRET_MISMATCH'), 'Could not verify your old seat. Try again.');
     });
 
     test('maps INVALID_PLAYER_NAME', () async {

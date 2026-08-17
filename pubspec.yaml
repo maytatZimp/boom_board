@@ -17,6 +17,7 @@ dependencies:
   logger: ^2.7.0
   flutter_dotenv: ^6.0.1
   event_bus: ^2.0.1
+  shared_preferences: ^2.5.3
 
 dev_dependencies:
   flutter_test:

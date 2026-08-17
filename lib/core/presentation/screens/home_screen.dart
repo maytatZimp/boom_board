@@ -3,6 +3,7 @@ import 'package:boom_board/core/presentation/models/enums/home_panel_type.dart';
 import 'package:boom_board/core/presentation/widgets/home_background_anim.dart';
 import 'package:boom_board/core/presentation/widgets/host_panel.dart';
 import 'package:boom_board/core/presentation/widgets/join_panel.dart';
+import 'package:boom_board/core/presentation/widgets/rejoin_panel.dart';
 import 'package:boom_board/core/presentation/utils/responsive.dart';
 import 'package:boom_board/core/presentation/widgets/retro_loading_text.dart';
 import 'package:boom_board/core/presentation/widgets/start_panel.dart';
@@ -168,6 +169,15 @@ class HomeScreen extends GetView<HomeController> {
         textEditingCtl: controller.playerNameTextFieldCtl,
         onCreatePressed: controller.onCreatePressed,
         onCancelPressed: controller.onCancelPressed,
+        errorText: ctl.panelError,
+      );
+    } else if (ctl.panelType == HomePanelType.rejoin && ctl.pendingRejoin != null) {
+      return RejoinPanel(
+        key: const ValueKey('rejoin_panel'), // REQUIRED for AnimatedSwitcher
+        roomCode: ctl.pendingRejoin!.roomCode,
+        playerName: ctl.pendingRejoin!.playerName,
+        onRejoinPressed: controller.onRejoinPressed,
+        onDismissPressed: controller.onDismissRejoinPressed,
         errorText: ctl.panelError,
       );
     } else if (ctl.panelType == HomePanelType.join) {

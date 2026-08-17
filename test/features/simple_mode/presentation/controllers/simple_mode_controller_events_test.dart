@@ -1,4 +1,5 @@
 import 'package:boom_board/core/data/models/coordinate.dart';
+import 'package:boom_board/core/domain/entities/spectator_entity.dart';
 import 'package:boom_board/core/events/event_bus.dart';
 import 'package:boom_board/features/simple_mode/data/models/enum/game_state.dart';
 import 'package:boom_board/features/simple_mode/data/models/enum/log_action_type.dart';
@@ -8,11 +9,17 @@ import 'package:boom_board/features/simple_mode/domain/entities/events/game_over
 import 'package:boom_board/features/simple_mode/domain/entities/events/game_reset_event.dart';
 import 'package:boom_board/features/simple_mode/domain/entities/events/game_started_event.dart';
 import 'package:boom_board/features/simple_mode/domain/entities/events/phase_changed_event.dart';
-import 'package:boom_board/features/simple_mode/domain/entities/events/player_dropped_event.dart';
+import 'package:boom_board/features/simple_mode/domain/entities/events/player_disconnected_event.dart';
 import 'package:boom_board/features/simple_mode/domain/entities/events/player_joined_event.dart';
 import 'package:boom_board/features/simple_mode/domain/entities/events/player_left_event.dart';
 import 'package:boom_board/features/simple_mode/domain/entities/events/player_ready_event.dart';
+import 'package:boom_board/features/simple_mode/domain/entities/events/player_reconnected_event.dart';
+import 'package:boom_board/features/simple_mode/domain/entities/events/player_renamed_event.dart';
+import 'package:boom_board/features/simple_mode/domain/entities/events/room_snapshot_event.dart';
+import 'package:boom_board/features/simple_mode/domain/entities/events/spectator_changed_event.dart';
+import 'package:boom_board/features/simple_mode/domain/entities/simple_mode_player_entity.dart';
 import 'package:boom_board/features/simple_mode/domain/entities/simple_mode_result_entity.dart';
+import 'package:boom_board/features/simple_mode/presentation/controllers/simple_mode_controller.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import '../../../../helpers/controller_harness.dart';
@@ -168,14 +175,14 @@ void main() {
     });
   });
 
-  group('onPlayerDroppedEventReceived', () {
+  group('onPlayerDisconnectedEventReceived', () {
     test('applies the list, the new host and appends the logs', () async {
       await buildRoom(hostId: 'p-2');
       harness.controller.actionLogList = [log('old')];
 
-      harness.controller.onPlayerDroppedEventReceived(
-        PlayerDroppedEvent(
-          droppedPlayerId: 'p-2',
+      harness.controller.onPlayerDisconnectedEventReceived(
+        PlayerDisconnectedEvent(
+          disconnectedPlayerId: 'p-2',
           newHostId: localId,
           playerList: [player(id: localId)],
           newLogs: [log('new-1'), log('new-2')],
@@ -185,6 +192,302 @@ void main() {
       expect(harness.controller.hostId, localId);
       expect(harness.controller.playerList, hasLength(1));
       expect(harness.controller.actionLogList.map((l) => l.id), ['old', 'new-1', 'new-2']);
+    });
+
+    test('leaves the dropped player alive on the board', () async {
+      // The whole feature: a disconnect holds the seat rather than eliminating
+      // it, so the roster shows offline-but-alive and they can still win.
+      await buildRoom();
+
+      harness.controller.onPlayerDisconnectedEventReceived(
+        PlayerDisconnectedEvent(
+          disconnectedPlayerId: 'p-2',
+          newHostId: localId,
+          playerList: [player(id: localId), player(id: 'p-2', isDisconnected: true)],
+          newLogs: const [],
+        ),
+      );
+
+      expect(harness.playerById('p-2').isDisconnected, isTrue);
+      expect(harness.playerById('p-2').isAlive, isTrue);
+    });
+
+    test('keeps the local player on their tile', () async {
+      // Positions are private, so a broadcast roster carries no x/y. Applying
+      // it naively would blank the local avatar every time anyone dropped.
+      await buildRoom();
+      harness.controller.playerList = [
+        player(id: localId, hasPositioned: true, x: 4, y: 6),
+        player(id: 'p-2'),
+      ];
+
+      harness.controller.onPlayerDisconnectedEventReceived(
+        PlayerDisconnectedEvent(
+          disconnectedPlayerId: 'p-2',
+          newHostId: localId,
+          playerList: [
+            player(id: localId, hasPositioned: true),
+            player(id: 'p-2', isDisconnected: true),
+          ],
+          newLogs: const [],
+        ),
+      );
+
+      expect(harness.local.x, 4);
+      expect(harness.local.y, 6);
+    });
+  });
+
+  group('onPlayerReconnectedEventReceived', () {
+    test('clears the disconnected flag from the refreshed roster', () async {
+      await buildRoom();
+      harness.controller.playerList = [
+        player(id: localId),
+        player(id: 'p-2', isDisconnected: true),
+      ];
+
+      harness.controller.onPlayerReconnectedEventReceived(
+        PlayerReconnectedEvent(
+          playerId: 'p-2',
+          playerList: [player(id: localId), player(id: 'p-2')],
+        ),
+      );
+
+      expect(harness.playerById('p-2').isDisconnected, isFalse);
+    });
+  });
+
+  group('onPlayerRenamedEventReceived', () {
+    test('renames one roster row and leaves the rest alone', () async {
+      await buildRoom();
+
+      harness.controller.onPlayerRenamedEventReceived(
+        PlayerRenamedEvent(playerId: 'p-2', name: 'Roberta'),
+      );
+
+      expect(harness.playerById('p-2').name, 'Roberta');
+      expect(harness.local.name, localId);
+    });
+
+    test('renames a spectator when the id is not a player', () async {
+      await buildRoom();
+      harness.controller.spectatorList = [SpectatorEntity(id: 's-1', name: 'Watcher')];
+
+      harness.controller.onPlayerRenamedEventReceived(
+        PlayerRenamedEvent(playerId: 's-1', name: 'Watcher II'),
+      );
+
+      expect(harness.controller.spectatorList.single.name, 'Watcher II');
+    });
+
+    test('ignores an id that belongs to nobody', () async {
+      await buildRoom();
+
+      expect(
+        () => harness.controller.onPlayerRenamedEventReceived(
+          PlayerRenamedEvent(playerId: 'ghost', name: 'Nobody'),
+        ),
+        returnsNormally,
+      );
+    });
+  });
+
+  group('spectator events', () {
+    test('a joining spectator lands in the spectator list, not the roster', () async {
+      // Spectators are not board participants: they have no tile, no rank, and
+      // must not count toward the roster the start gate reads.
+      await buildRoom();
+
+      harness.controller.onSpectatorJoinedEventReceived(
+        SpectatorJoinedEvent(
+          spectator: SpectatorEntity(id: 's-1', name: 'Watcher'),
+          spectatorList: [SpectatorEntity(id: 's-1', name: 'Watcher')],
+        ),
+      );
+
+      expect(harness.controller.spectatorList.single.id, 's-1');
+      expect(harness.controller.playerList.map((p) => p.id), isNot(contains('s-1')));
+    });
+
+    test('a leaving spectator is dropped from the list', () async {
+      await buildRoom();
+      harness.controller.spectatorList = [SpectatorEntity(id: 's-1', name: 'Watcher')];
+
+      harness.controller.onSpectatorLeftEventReceived(
+        SpectatorLeftEvent(spectatorId: 's-1', spectatorList: const []),
+      );
+
+      expect(harness.controller.spectatorList, isEmpty);
+    });
+  });
+
+  group('applyRoomSnapshot', () {
+    RoomSnapshotEvent snapshot({
+      GameState state = GameState.attack,
+      int roundNumber = 3,
+      int remainingMs = 12000,
+      bool isSpectator = false,
+      RoomSnapshotSelf? you,
+      List<SimpleModePlayerEntity>? players,
+      List<SpectatorEntity>? spectators,
+      List<ActionLogEntity>? logs,
+      List<SimpleModeResultEntity>? ranking,
+      Coordinate? winnerPosition,
+    }) {
+      return RoomSnapshotEvent(
+        state: state,
+        roundNumber: roundNumber,
+        boardWidth: 8,
+        boardHeight: 8,
+        destroyedTiles: [Coordinate(x: 0, y: 1)],
+        timeLimit: 30,
+        remainingMs: remainingMs,
+        hostId: localId,
+        playerList: players ?? [player(id: localId), player(id: 'p-2')],
+        spectatorList: spectators ?? const [],
+        logs: logs ?? const [],
+        isSpectator: isSpectator,
+        you: you,
+        ranking: ranking ?? const [],
+        winnerPosition: winnerPosition,
+      );
+    }
+
+    test('rebuilds the public room state a returning client missed', () async {
+      await buildRoom();
+
+      harness.controller.applyRoomSnapshot(snapshot(spectators: [SpectatorEntity(id: 's-1', name: 'Watcher')]));
+
+      expect(harness.controller.currentState, GameState.attack);
+      expect(harness.controller.currentRound, 3);
+      expect(harness.controller.destroyedTile, [Coordinate(x: 0, y: 1)]);
+      expect(harness.controller.spectatorList.single.id, 's-1');
+    });
+
+    test('restores the local seat from the private `you` block', () async {
+      await buildRoom();
+
+      harness.controller.applyRoomSnapshot(
+        snapshot(
+          you: RoomSnapshotSelf(
+            x: 4,
+            y: 2,
+            hasPositioned: true,
+            bombTarget: Coordinate(x: 5, y: 5),
+            throwOrder: 1,
+            isAlive: true,
+          ),
+        ),
+      );
+
+      expect(harness.local.x, 4);
+      expect(harness.local.y, 2);
+      expect(harness.local.hasPositioned, isTrue);
+      expect(harness.local.hasThrowBomb, isTrue);
+      expect(harness.local.throwOrder, 1);
+      expect(harness.controller.lockedBombTarget, Coordinate(x: 5, y: 5));
+    });
+
+    test('a dead reconnect comes back dead, so existing gating makes them passive', () async {
+      await buildRoom();
+
+      harness.controller.applyRoomSnapshot(
+        snapshot(
+          players: [player(id: localId, isAlive: false), player(id: 'p-2')],
+          you: RoomSnapshotSelf(
+            x: 4,
+            y: 2,
+            hasPositioned: true,
+            bombTarget: null,
+            throwOrder: null,
+            isAlive: false,
+          ),
+        ),
+      );
+
+      expect(harness.local.isAlive, isFalse);
+      expect(harness.controller.lockedBombTarget, isNull);
+    });
+
+    test('replaces the log rather than appending, so nothing is duplicated', () async {
+      // The snapshot carries the current round's logs in full.
+      await buildRoom();
+      harness.controller.actionLogList = [log('already-seen')];
+
+      harness.controller.applyRoomSnapshot(snapshot(logs: [log('already-seen'), log('missed')]));
+
+      expect(harness.controller.actionLogList.map((l) => l.id), ['already-seen', 'missed']);
+    });
+
+    test('starts the timer at what is left of the phase, not from full', () async {
+      // The phase clock never paused while the client was away.
+      await buildRoom();
+
+      harness.controller.applyRoomSnapshot(snapshot(remainingMs: 12450));
+
+      expect(harness.controller.currentPhaseTimeLimit, 13);
+    });
+
+    test('runs no timer in an untimed phase', () async {
+      await buildRoom();
+
+      harness.controller.applyRoomSnapshot(snapshot(state: GameState.end, remainingMs: 0));
+
+      expect(harness.controller.currentPhaseTimeLimit, lessThanOrEqualTo(0));
+    });
+
+    test('seeds the endgame overlay when the game is already over', () async {
+      await buildRoom();
+
+      harness.controller.applyRoomSnapshot(
+        snapshot(
+          state: GameState.end,
+          remainingMs: 0,
+          ranking: [
+            SimpleModeResultEntity(rank: 1, id: localId, name: localId, isAlive: true, isDisconnected: false),
+          ],
+          winnerPosition: Coordinate(x: 2, y: 5),
+        ),
+      );
+
+      expect(harness.controller.finalRanking.single.rank, 1);
+      expect(harness.controller.winnerPosition, Coordinate(x: 2, y: 5));
+      expect(harness.controller.showEndgameOverlay, isTrue);
+    });
+
+    test('marks the client a spectator and leaves it without a seat', () async {
+      await buildRoom();
+
+      harness.controller.applyRoomSnapshot(
+        snapshot(isSpectator: true, players: [player(id: 'p-2'), player(id: 'p-3')]),
+      );
+
+      expect(harness.controller.isSpectator, isTrue);
+      expect(harness.controller.localPlayer, isNull);
+    });
+
+    test('clears the connection overlay, since the snapshot means we are back', () async {
+      await buildRoom();
+      harness.controller.connectionState = RoomConnectionState.reconnectFailed;
+      harness.controller.connectionError = 'whatever';
+
+      harness.controller.applyRoomSnapshot(snapshot());
+
+      expect(harness.controller.connectionState, RoomConnectionState.connected);
+      expect(harness.controller.connectionError, isNull);
+    });
+
+    test('drops animations left mid-flight by the drop', () async {
+      // Nothing that follows a reconnect would ever remove them.
+      await buildRoom();
+      harness.controller.triggerExplosionEffect(1, 1);
+      expect(harness.controller.activeExplosions, isNotEmpty);
+
+      harness.controller.applyRoomSnapshot(snapshot());
+
+      expect(harness.controller.activeExplosions, isEmpty);
+      expect(harness.controller.activeBombDrops, isEmpty);
+      expect(harness.controller.activeHideAnimations, isEmpty);
     });
   });
 
@@ -333,7 +636,11 @@ void main() {
         ..showEndgameOverlay = false;
 
       harness.controller.onGameResetEventReceived(
-        GameResetEvent(playerList: [player(id: localId), player(id: 'p-2')]),
+        GameResetEvent(
+          playerList: [player(id: localId), player(id: 'p-2')],
+          spectatorList: const [],
+          newHostId: localId,
+        ),
       );
 
       expect(harness.controller.currentState, GameState.lobby);

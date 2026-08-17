@@ -4,6 +4,7 @@ class PlayerEntity {
   bool isAlive;
   bool hasPositioned;
   bool isDisconnected;
+  int? throwOrder;
 
   PlayerEntity({
     required this.id,
@@ -11,5 +12,6 @@ class PlayerEntity {
     required this.isAlive,
     required this.hasPositioned,
     required this.isDisconnected,
+    this.throwOrder,
   });
 }

@@ -1,6 +1,8 @@
+import 'package:boom_board/core/data/models/mapper/spectator_extension.dart';
 import 'package:boom_board/core/events/event_bus.dart';
 import 'package:boom_board/core/exceptions/invalid_socket_response_exception.dart';
 import 'package:boom_board/core/utils/socket_service.dart';
+import 'package:boom_board/features/simple_mode/data/data_source/room_snapshot_cache.dart';
 import 'package:boom_board/features/simple_mode/data/models/mapper/action_log_mapper.dart';
 import 'package:boom_board/features/simple_mode/data/models/mapper/explosion_result_extension.dart';
 import 'package:boom_board/features/simple_mode/data/models/mapper/simple_mode_result_extension.dart';
@@ -10,32 +12,44 @@ import 'package:boom_board/features/simple_mode/data/models/models/socket_event/
 import 'package:boom_board/features/simple_mode/data/models/models/socket_event/game_reset_model.dart';
 import 'package:boom_board/features/simple_mode/data/models/models/socket_event/game_started_model.dart';
 import 'package:boom_board/features/simple_mode/data/models/models/socket_event/phase_changd_model.dart';
-import 'package:boom_board/features/simple_mode/data/models/models/socket_event/player_dropped_model.dart';
+import 'package:boom_board/features/simple_mode/data/models/models/socket_event/player_disconnected_model.dart';
 import 'package:boom_board/features/simple_mode/data/models/models/socket_event/player_joined_model.dart';
 import 'package:boom_board/features/simple_mode/data/models/models/socket_event/player_left_model.dart';
 import 'package:boom_board/features/simple_mode/data/models/models/socket_event/player_ready_model.dart';
+import 'package:boom_board/features/simple_mode/data/models/models/socket_event/player_reconnected_model.dart';
+import 'package:boom_board/features/simple_mode/data/models/models/socket_event/player_renamed_model.dart';
+import 'package:boom_board/features/simple_mode/data/models/models/socket_event/room_snapshot_model.dart';
 import 'package:boom_board/features/simple_mode/data/models/models/socket_event/round_resolved_model.dart';
+import 'package:boom_board/features/simple_mode/data/models/models/socket_event/spectator_joined_model.dart';
 import 'package:boom_board/features/simple_mode/domain/entities/events/forced_position_event.dart';
 import 'package:boom_board/features/simple_mode/domain/entities/events/game_over_event.dart';
 import 'package:boom_board/features/simple_mode/domain/entities/events/game_reset_event.dart';
 import 'package:boom_board/features/simple_mode/domain/entities/events/game_started_event.dart';
 import 'package:boom_board/features/simple_mode/domain/entities/events/phase_changed_event.dart';
-import 'package:boom_board/features/simple_mode/domain/entities/events/player_dropped_event.dart';
+import 'package:boom_board/features/simple_mode/domain/entities/events/player_disconnected_event.dart';
 import 'package:boom_board/features/simple_mode/domain/entities/events/player_joined_event.dart';
 import 'package:boom_board/features/simple_mode/domain/entities/events/player_left_event.dart';
 import 'package:boom_board/features/simple_mode/domain/entities/events/player_ready_event.dart';
+import 'package:boom_board/features/simple_mode/domain/entities/events/player_reconnected_event.dart';
+import 'package:boom_board/features/simple_mode/domain/entities/events/player_renamed_event.dart';
+import 'package:boom_board/features/simple_mode/domain/entities/events/room_snapshot_event.dart';
 import 'package:boom_board/features/simple_mode/domain/entities/events/round_resolved_event.dart';
+import 'package:boom_board/features/simple_mode/domain/entities/events/spectator_changed_event.dart';
 import 'package:get_it/get_it.dart';
 import 'package:logger/logger.dart';
 
 class SimpleModeSocketHandler {
   final SocketService socketService;
+  final RoomSnapshotCache roomSnapshotCache;
 
   Logger get logger {
     return GetIt.I<Logger>();
   }
 
-  SimpleModeSocketHandler({required this.socketService});
+  SimpleModeSocketHandler({
+    required this.socketService,
+    required this.roomSnapshotCache,
+  });
 
   void init() {
     // Rebind from a clean slate. socket.on() appends and there is a single
@@ -51,7 +65,17 @@ class SimpleModeSocketHandler {
 
     socketService.socket.on('playerLeft', onPlayerLeft);
 
-    socketService.socket.on('playerDropped', onPlayerDropped);
+    socketService.socket.on('playerDisconnected', onPlayerDisconnected);
+
+    socketService.socket.on('playerReconnected', onPlayerReconnected);
+
+    socketService.socket.on('playerRenamed', onPlayerRenamed);
+
+    socketService.socket.on('spectatorJoined', onSpectatorJoined);
+
+    socketService.socket.on('spectatorLeft', onSpectatorLeft);
+
+    socketService.socket.on('roomSnapshot', onRoomSnapshot);
 
     socketService.socket.on('gameStarted', onGameStarted);
 
@@ -73,7 +97,17 @@ class SimpleModeSocketHandler {
 
     socketService.socket.off('playerLeft', onPlayerLeft);
 
-    socketService.socket.off('playerDropped', onPlayerDropped);
+    socketService.socket.off('playerDisconnected', onPlayerDisconnected);
+
+    socketService.socket.off('playerReconnected', onPlayerReconnected);
+
+    socketService.socket.off('playerRenamed', onPlayerRenamed);
+
+    socketService.socket.off('spectatorJoined', onSpectatorJoined);
+
+    socketService.socket.off('spectatorLeft', onSpectatorLeft);
+
+    socketService.socket.off('roomSnapshot', onRoomSnapshot);
 
     socketService.socket.off('gameStarted', onGameStarted);
 
@@ -137,22 +171,130 @@ class SimpleModeSocketHandler {
     }
   }
 
-  void onPlayerDropped(dynamic data) async {
+  void onPlayerDisconnected(dynamic data) async {
     try {
       _validateSocketEventData(data);
 
-      final dataModel = PlayerDroppedModel.fromJson(getData(data as Map<String, dynamic>));
+      final dataModel = PlayerDisconnectedModel.fromJson(getData(data as Map<String, dynamic>));
 
       eventBus.fire(
-        PlayerDroppedEvent(
-          droppedPlayerId: dataModel.droppedPlayerId,
+        PlayerDisconnectedEvent(
+          disconnectedPlayerId: dataModel.disconnectedPlayerId,
           newHostId: dataModel.newHostId,
           playerList: dataModel.playerList.toSimpleModeEntity(),
           newLogs: dataModel.newLogs.map((e) => e.toEntity()).toList(),
         ),
       );
     } catch (e, stackTrace) {
-      logger.e('onPlayerDropped error.', error: e, stackTrace: stackTrace);
+      logger.e('onPlayerDisconnected error.', error: e, stackTrace: stackTrace);
+    }
+  }
+
+  void onPlayerReconnected(dynamic data) async {
+    try {
+      _validateSocketEventData(data);
+
+      final dataModel = PlayerReconnectedModel.fromJson(getData(data as Map<String, dynamic>));
+
+      eventBus.fire(
+        PlayerReconnectedEvent(
+          playerId: dataModel.playerId,
+          playerList: dataModel.playerList.toSimpleModeEntity(),
+        ),
+      );
+    } catch (e, stackTrace) {
+      logger.e('onPlayerReconnected error.', error: e, stackTrace: stackTrace);
+    }
+  }
+
+  void onPlayerRenamed(dynamic data) async {
+    try {
+      _validateSocketEventData(data);
+
+      final dataModel = PlayerRenamedModel.fromJson(getData(data as Map<String, dynamic>));
+
+      eventBus.fire(
+        PlayerRenamedEvent(playerId: dataModel.playerId, name: dataModel.name),
+      );
+    } catch (e, stackTrace) {
+      logger.e('onPlayerRenamed error.', error: e, stackTrace: stackTrace);
+    }
+  }
+
+  void onSpectatorJoined(dynamic data) async {
+    try {
+      _validateSocketEventData(data);
+
+      final dataModel = SpectatorJoinedModel.fromJson(getData(data as Map<String, dynamic>));
+
+      eventBus.fire(
+        SpectatorJoinedEvent(
+          spectator: dataModel.spectator.toEntity(),
+          spectatorList: dataModel.spectatorList.toEntity(),
+        ),
+      );
+    } catch (e, stackTrace) {
+      logger.e('onSpectatorJoined error.', error: e, stackTrace: stackTrace);
+    }
+  }
+
+  void onSpectatorLeft(dynamic data) async {
+    try {
+      _validateSocketEventData(data);
+
+      final dataModel = SpectatorLeftModel.fromJson(getData(data as Map<String, dynamic>));
+
+      eventBus.fire(
+        SpectatorLeftEvent(
+          spectatorId: dataModel.spectatorId,
+          spectatorList: dataModel.spectatorList.toEntity(),
+        ),
+      );
+    } catch (e, stackTrace) {
+      logger.e('onSpectatorLeft error.', error: e, stackTrace: stackTrace);
+    }
+  }
+
+  void onRoomSnapshot(dynamic data) async {
+    try {
+      _validateSocketEventData(data);
+
+      final dataModel = RoomSnapshotModel.fromJson(getData(data as Map<String, dynamic>));
+      final self = dataModel.you;
+
+      final snapshot = RoomSnapshotEvent(
+        state: dataModel.state,
+        roundNumber: dataModel.roundNumber,
+        boardWidth: dataModel.boardWidth,
+        boardHeight: dataModel.boardHeight,
+        destroyedTiles: dataModel.destroyedTiles,
+        timeLimit: dataModel.timeLimit,
+        remainingMs: dataModel.remainingMs,
+        hostId: dataModel.hostId,
+        playerList: dataModel.playerList.toSimpleModeEntity(),
+        spectatorList: dataModel.spectatorList.toEntity(),
+        logs: dataModel.logs.map((e) => e.toEntity()).toList(),
+        isSpectator: dataModel.isSpectator,
+        you: self == null
+            ? null
+            : RoomSnapshotSelf(
+                x: self.x,
+                y: self.y,
+                hasPositioned: self.hasPositioned,
+                bombTarget: self.bombTarget,
+                throwOrder: self.throwOrder,
+                isAlive: self.isAlive,
+              ),
+        ranking: dataModel.ranking.map((e) => e.toEntity()).toList(),
+        winnerPosition: dataModel.winnerPosition,
+      );
+
+      // Park it before firing: on a mid-game entry this lands while the client
+      // is still on the home screen, so nothing is listening yet.
+      roomSnapshotCache.put(snapshot);
+      eventBus.fire(snapshot);
+    } catch (e, stackTrace) {
+      logger.e('onRoomSnapshot error.', error: e, stackTrace: stackTrace);
     }
   }
 
@@ -257,6 +399,8 @@ class SimpleModeSocketHandler {
       eventBus.fire(
         GameResetEvent(
           playerList: dataModel.playerList.toSimpleModeEntity(),
+          spectatorList: dataModel.spectatorList.toEntity(),
+          newHostId: dataModel.newHostId,
         ),
       );
     } catch (e, stackTrace) {

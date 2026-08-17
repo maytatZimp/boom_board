@@ -1,3 +1,4 @@
+import 'package:boom_board/core/data/data_source/identity_store.dart';
 import 'package:boom_board/core/data/data_source/room_socket_service.dart';
 import 'package:boom_board/core/data/repositories/room_server_repository_impl.dart';
 import 'package:boom_board/core/domain/repositories/room_server_repository.dart';
@@ -13,9 +14,15 @@ import 'package:boom_board/features/simple_mode/di/simple_mode_injection.dart';
 import 'package:get_it/get_it.dart';
 import 'package:logger/logger.dart';
 
-void registerDependencies() {
+Future<void> registerDependencies() async {
   GetIt.I.registerSingleton<Logger>(initLogger());
   GetIt.I.registerSingleton<SocketService>(SocketService());
+
+  // Load the persisted credential slot before anything can ask who we are --
+  // GetCurrentPlayerIdUseCase reads it synchronously.
+  final identityStore = IdentityStore();
+  await identityStore.load();
+  GetIt.I.registerSingleton<IdentityStore>(identityStore);
 
   registerCoreSingletonDependencies();
 
@@ -50,6 +57,7 @@ void registerCoreFactoryDependencies() {
     () => CreateRoomUseCase(
       roomServerRepository: GetIt.I<RoomServerRepository>(),
       simpleModeSocketHandler: GetIt.I<SimpleModeSocketHandler>(),
+      identityStore: GetIt.I<IdentityStore>(),
     ),
   );
 
@@ -57,6 +65,7 @@ void registerCoreFactoryDependencies() {
     () => JoinRoomUseCase(
       roomServerRepository: GetIt.I<RoomServerRepository>(),
       simpleModeSocketHandler: GetIt.I<SimpleModeSocketHandler>(),
+      identityStore: GetIt.I<IdentityStore>(),
     ),
   );
 
@@ -64,12 +73,13 @@ void registerCoreFactoryDependencies() {
     () => LeaveRoomUseCase(
       roomServerRepository: GetIt.I<RoomServerRepository>(),
       simpleModeSocketHandler: GetIt.I<SimpleModeSocketHandler>(),
+      identityStore: GetIt.I<IdentityStore>(),
     ),
   );
 
   GetIt.I.registerFactory(
     () => GetCurrentPlayerIdUseCase(
-      socketService: GetIt.I<SocketService>(),
+      identityStore: GetIt.I<IdentityStore>(),
     ),
   );
 }

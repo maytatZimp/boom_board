@@ -1,3 +1,4 @@
+import 'package:boom_board/core/data/data_source/identity_store.dart';
 import 'package:boom_board/core/data/data_source/room_socket_service.dart';
 import 'package:boom_board/core/data/models/enums/game_mode.dart';
 import 'package:boom_board/core/data/models/requests/create_room_request.dart';
@@ -8,6 +9,7 @@ import 'package:boom_board/core/domain/use_cases/get_current_player_id_use_case.
 import 'package:boom_board/core/domain/use_cases/join_room_use_case.dart';
 import 'package:boom_board/core/domain/use_cases/leave_room_use_case.dart';
 import 'package:boom_board/core/utils/socket_service.dart';
+import 'package:boom_board/features/simple_mode/data/data_source/room_snapshot_cache.dart';
 import 'package:boom_board/features/simple_mode/data/data_source/simple_mode_socket_handler.dart';
 import 'package:boom_board/features/simple_mode/data/data_source/simple_mode_socket_service.dart';
 import 'package:boom_board/features/simple_mode/data/models/requests/reset_game_request.dart';
@@ -15,6 +17,7 @@ import 'package:boom_board/features/simple_mode/data/models/requests/set_positio
 import 'package:boom_board/features/simple_mode/data/models/requests/start_game_request.dart';
 import 'package:boom_board/features/simple_mode/data/models/requests/throw_bomb_request.dart';
 import 'package:boom_board/features/simple_mode/domain/repositories/simple_mode_server_repository.dart';
+import 'package:boom_board/features/simple_mode/domain/use_cases/consume_room_snapshot_use_case.dart';
 import 'package:boom_board/features/simple_mode/domain/use_cases/reset_game_use_case.dart';
 import 'package:boom_board/features/simple_mode/domain/use_cases/set_position_use_case.dart';
 import 'package:boom_board/features/simple_mode/domain/use_cases/start_game_use_case.dart';
@@ -78,9 +81,37 @@ class MockSimpleModeServerRepository extends Mock implements SimpleModeServerRep
 
 class MockSimpleModeSocketHandler extends Mock implements SimpleModeSocketHandler {}
 
+class MockIdentityStore extends Mock implements IdentityStore {}
+
+class MockRoomSnapshotCache extends Mock implements RoomSnapshotCache {}
+
+class MockConsumeRoomSnapshotUseCase extends Mock implements ConsumeRoomSnapshotUseCase {}
+
 class MockGetCurrentPlayerIdUseCase extends Mock implements GetCurrentPlayerIdUseCase {}
 
+class MockJoinRoomUseCase extends Mock implements JoinRoomUseCase {}
+
 class MockLeaveRoomUseCase extends Mock implements LeaveRoomUseCase {}
+
+/// An [IdentityStore] mock with every method already stubbed for the common
+/// "nothing stored yet" case, so tests only stub what they actually assert on.
+MockIdentityStore emptyIdentityStore() {
+  final store = MockIdentityStore();
+  when(() => store.credentials).thenReturn(null);
+  when(() => store.playerId).thenReturn(null);
+  when(() => store.roomCode).thenReturn(null);
+  when(() => store.credentialsFor(any())).thenReturn(null);
+  when(
+    () => store.save(
+      playerId: any(named: 'playerId'),
+      secret: any(named: 'secret'),
+      roomCode: any(named: 'roomCode'),
+      playerName: any(named: 'playerName'),
+    ),
+  ).thenAnswer((_) async {});
+  when(() => store.clear()).thenAnswer((_) async {});
+  return store;
+}
 
 class MockStartGameUseCase extends Mock implements StartGameUseCase {}
 
