@@ -5,6 +5,7 @@ import 'package:boom_board/features/simple_mode/data/data_source/simple_mode_soc
 import 'package:boom_board/features/simple_mode/data/repositories/simple_mode_server_repository_impl.dart';
 import 'package:boom_board/features/simple_mode/domain/repositories/simple_mode_server_repository.dart';
 import 'package:boom_board/features/simple_mode/domain/use_cases/consume_room_snapshot_use_case.dart';
+import 'package:boom_board/features/simple_mode/domain/use_cases/request_snapshot_use_case.dart';
 import 'package:boom_board/features/simple_mode/domain/use_cases/reset_game_use_case.dart';
 import 'package:boom_board/features/simple_mode/domain/use_cases/set_position_use_case.dart';
 import 'package:boom_board/features/simple_mode/domain/use_cases/start_game_use_case.dart';
@@ -34,6 +35,12 @@ void registerSimpleModeSingletonDependencies() {
 void registerSimpleModeFactoryDependencies() {
   GetIt.I.registerFactory<ResetGameUseCase>(
     () => ResetGameUseCase(
+      simpleModeServerRepository: GetIt.I<SimpleModeServerRepository>(),
+    ),
+  );
+
+  GetIt.I.registerFactory<RequestSnapshotUseCase>(
+    () => RequestSnapshotUseCase(
       simpleModeServerRepository: GetIt.I<SimpleModeServerRepository>(),
     ),
   );

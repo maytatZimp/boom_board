@@ -1292,7 +1292,10 @@ class SimpleModeScreen extends GetView<SimpleModeController> {
               alignment: Alignment.centerLeft,
               child: TweenAnimationBuilder<double>(
                 key: ValueKey(ctl.currentTimerKey), // Restarts when the phase changes
-                tween: Tween<double>(begin: 1.0, end: 0.0),
+                // Starts part-drained when we joined the phase late, so the
+                // bar always empties at one phase-length per full bar rather
+                // than sprinting through whatever time is left.
+                tween: Tween<double>(begin: ctl.currentPhaseStartProgress, end: 0.0),
                 duration: Duration(seconds: ctl.currentPhaseTimeLimit),
                 builder: (context, progress, child) {
                   // Dynamic Color: Green -> Yellow (at 50%) -> Red (at 20%)

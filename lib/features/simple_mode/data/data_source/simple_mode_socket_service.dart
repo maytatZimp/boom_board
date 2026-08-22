@@ -35,6 +35,10 @@ class SimpleModeSocketService {
     return null;
   }
 
+  Future<void> requestSnapshot() async {
+    await socketService.emitSocket(actionName: 'requestSnapshot');
+  }
+
   Future<void> resetGame(ResetGameRequest request) async {
     await socketService.emitSocket(
       actionName: 'resetGame',

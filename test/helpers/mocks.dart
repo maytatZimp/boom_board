@@ -18,6 +18,7 @@ import 'package:boom_board/features/simple_mode/data/models/requests/start_game_
 import 'package:boom_board/features/simple_mode/data/models/requests/throw_bomb_request.dart';
 import 'package:boom_board/features/simple_mode/domain/repositories/simple_mode_server_repository.dart';
 import 'package:boom_board/features/simple_mode/domain/use_cases/consume_room_snapshot_use_case.dart';
+import 'package:boom_board/features/simple_mode/domain/use_cases/request_snapshot_use_case.dart';
 import 'package:boom_board/features/simple_mode/domain/use_cases/reset_game_use_case.dart';
 import 'package:boom_board/features/simple_mode/domain/use_cases/set_position_use_case.dart';
 import 'package:boom_board/features/simple_mode/domain/use_cases/start_game_use_case.dart';
@@ -118,6 +119,8 @@ class MockStartGameUseCase extends Mock implements StartGameUseCase {}
 class MockSetPositionUseCase extends Mock implements SetPositionUseCase {}
 
 class MockThrowBombUseCase extends Mock implements ThrowBombUseCase {}
+
+class MockRequestSnapshotUseCase extends Mock implements RequestSnapshotUseCase {}
 
 class MockResetGameUseCase extends Mock implements ResetGameUseCase {}
 

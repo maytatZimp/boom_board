@@ -10,5 +10,9 @@ abstract class SimpleModeServerRepository {
 
   Future<ThrowBombResponse?> throwBomb(ThrowBombRequest request);
 
+  /// Asks the server to re-send the private room snapshot. Nothing to send:
+  /// the server already knows which seat this socket holds.
+  Future<void> requestSnapshot();
+
   Future<void> resetGame(ResetGameRequest request);
 }

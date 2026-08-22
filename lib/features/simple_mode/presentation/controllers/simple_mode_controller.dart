@@ -9,6 +9,7 @@ import 'package:boom_board/core/domain/use_cases/get_current_player_id_use_case.
 import 'package:boom_board/core/domain/use_cases/join_room_use_case.dart';
 import 'package:boom_board/core/domain/use_cases/leave_room_use_case.dart';
 import 'package:boom_board/core/events/event_bus.dart';
+import 'package:boom_board/core/events/models/page_resumed_event.dart';
 import 'package:boom_board/core/events/models/socket_connected_error_event.dart';
 import 'package:boom_board/core/events/models/socket_connected_event.dart';
 import 'package:boom_board/core/events/models/socket_disconnected_event.dart';
@@ -37,6 +38,7 @@ import 'package:boom_board/features/simple_mode/domain/entities/events/spectator
 import 'package:boom_board/features/simple_mode/domain/entities/simple_mode_player_entity.dart';
 import 'package:boom_board/features/simple_mode/domain/entities/simple_mode_result_entity.dart';
 import 'package:boom_board/features/simple_mode/domain/use_cases/consume_room_snapshot_use_case.dart';
+import 'package:boom_board/features/simple_mode/domain/use_cases/request_snapshot_use_case.dart';
 import 'package:boom_board/features/simple_mode/domain/use_cases/reset_game_use_case.dart';
 import 'package:boom_board/features/simple_mode/domain/use_cases/set_position_use_case.dart';
 import 'package:boom_board/features/simple_mode/domain/use_cases/start_game_use_case.dart';
@@ -82,6 +84,12 @@ class SimpleModeController extends GetxController {
   RoomConnectionState connectionState = RoomConnectionState.connected;
   String? connectionError;
   bool _rejoinInFlight = false;
+  bool _resyncInFlight = false;
+  // Bumped every time authoritative state lands. A round animation captures it
+  // when it starts and abandons itself if it changed across an await, so a
+  // sequence left mid-flight by a background cannot overwrite the snapshot
+  // that superseded it.
+  int _roundAnimationGeneration = 0;
   List<ActionLogEntity> actionLogList = [];
   List<Coordinate> destroyedTile = [];
   Coordinate? hoveredTile;
@@ -90,8 +98,18 @@ class SimpleModeController extends GetxController {
   bool showEndgameOverlay = true;
   bool hideLocalPlayerIcon = false;
   List<SimpleModeResultEntity> finalRanking = [];
+  /// Seconds left in the current phase, and so how long the timer bar has to
+  /// finish draining. Not the phase's full length -- a client that arrived
+  /// mid-phase gets what is left of it.
   int currentPhaseTimeLimit = 0;
+
+  /// How full the timer bar starts, 0..1. Always 1 for a phase joined at its
+  /// start; for one joined late it is the fraction still to run, so the bar
+  /// drains at the same rate everyone else's does instead of racing to catch
+  /// up from full.
+  double currentPhaseStartProgress = 1;
   String currentTimerKey = '';
+  int _timerEpoch = 0;
 
   final ScrollController logScrollController = ScrollController();
   StreamSubscription? playerJoinEventSubs;
@@ -113,6 +131,7 @@ class SimpleModeController extends GetxController {
   StreamSubscription? socketConnectedSubs;
   StreamSubscription? socketReconnectAttemptSubs;
   StreamSubscription? forcedPositionSubs;
+  StreamSubscription? pageResumedSubs;
 
   // --- ANIMATION STATE ---
   // We store the coordinates of bombs currently falling
@@ -204,6 +223,7 @@ class SimpleModeController extends GetxController {
     socketConnectedSubs = eventBus.on<SocketConnectedEvent>().listen(_onSocketReconnected);
     socketReconnectAttemptSubs = eventBus.on<SocketReconnectAttemptEvent>().listen(_onReconnectAttempt);
     forcedPositionSubs = eventBus.on<ForcedPositionEvent>().listen(onForcedPositionReceived);
+    pageResumedSubs = eventBus.on<PageResumedEvent>().listen(_onPageResumed);
   }
 
   void unsubscribeListener() {
@@ -226,6 +246,7 @@ class SimpleModeController extends GetxController {
     socketConnectedSubs?.cancel();
     socketReconnectAttemptSubs?.cancel();
     forcedPositionSubs?.cancel();
+    pageResumedSubs?.cancel();
   }
 
   void resetRound() {
@@ -465,7 +486,10 @@ class SimpleModeController extends GetxController {
     lockedBombTarget = null;
 
     // Clear any animation left mid-flight by the drop; nothing that follows
-    // would ever remove it.
+    // would ever remove it. Bumping the generation also abandons the round
+    // sequence driving them -- it is still sitting on an await and would
+    // otherwise wake up and write its now-superseded round over this snapshot.
+    _roundAnimationGeneration++;
     activeBombDrops = [];
     activeExplosions = [];
     activeDeaths = [];
@@ -493,7 +517,7 @@ class SimpleModeController extends GetxController {
     // whatever is left of it rather than from full.
     final isTimedPhase = event.state == GameState.position || event.state == GameState.attack;
     if (isTimedPhase && event.remainingMs > 0) {
-      _startPhaseTimer((event.remainingMs / 1000).ceil());
+      _startPhaseTimer((event.remainingMs / 1000).ceil(), totalSeconds: event.timeLimit);
     } else {
       _clearPhaseTimer();
     }
@@ -546,6 +570,12 @@ class SimpleModeController extends GetxController {
   void onRoundResolvedEventReceived(RoundResolvedEvent event) async {
     logger.d('onRoundResolvedEventReceived called with $event');
 
+    // This sequence spans several seconds of awaits. If a snapshot lands in
+    // the middle of one -- a resync after a background, or a rejoin -- the
+    // server's view wins and everything below here is describing a round that
+    // has already been replaced.
+    final generation = ++_roundAnimationGeneration;
+
     // Temporarily lock UI into a 'process' state so players can't click things
     currentState = GameState.process;
     _clearPhaseTimer();
@@ -576,6 +606,7 @@ class SimpleModeController extends GetxController {
 
       // Wait for the "animation" to finish before evaluating the result
       await Future.delayed(anim_constant.bombDrop);
+      if (generation != _roundAnimationGeneration) return;
 
       if (explosion.bomberId == localPlayerId) {
         lockedBombTarget = null;
@@ -595,6 +626,7 @@ class SimpleModeController extends GetxController {
       }
 
       await Future.delayed(anim_constant.explosionSettle);
+      if (generation != _roundAnimationGeneration) return;
     }
 
     // --- ORBITAL LASER PHASE ---
@@ -604,6 +636,7 @@ class SimpleModeController extends GetxController {
 
       // Wait for the beam to finish firing
       await Future.delayed(anim_constant.destroyedTileDelay);
+      if (generation != _roundAnimationGeneration) return;
 
       // Now permanently scorch the tiles so they stay on fire
       destroyedTile = event.destroyedTiles;
@@ -751,6 +784,38 @@ class SimpleModeController extends GetxController {
       update([SimpleModeIds.connectionOverlay]);
     } finally {
       _rejoinInFlight = false;
+    }
+  }
+
+  void _onPageResumed(PageResumedEvent event) {
+    logger.d('Page is back on screen. Re-reading the room.');
+
+    // A drop has its own recovery: rejoinRoom() pulls a snapshot as part of
+    // getting the seat back, so asking for a second one here would just race
+    // it. Only the socket-survived case is ours to handle.
+    if (connectionState != RoomConnectionState.connected) return;
+
+    resyncFromServer();
+  }
+
+  /// Re-reads the room from the server and throws away whatever we had.
+  ///
+  /// The phase clock kept draining while we were backgrounded and rounds may
+  /// have resolved unseen, so local state is not stale by a little -- it can be
+  /// wrong about which phase we are even in.
+  Future<void> resyncFromServer() async {
+    if (_resyncInFlight) return;
+    _resyncInFlight = true;
+
+    try {
+      await GetIt.I<RequestSnapshotUseCase>().call();
+    } catch (e, stackTrace) {
+      // Nothing to surface: if the socket is genuinely gone the disconnect
+      // handler owns the overlay, and if it is merely slow the next resume or
+      // reconnect will try again.
+      logger.e('resyncFromServer error.', error: e, stackTrace: stackTrace);
+    } finally {
+      _resyncInFlight = false;
     }
   }
 
@@ -910,13 +975,29 @@ class SimpleModeController extends GetxController {
     });
   }
 
-  void _startPhaseTimer(int seconds) {
+  /// Starts the phase clock with [seconds] left to run.
+  ///
+  /// [totalSeconds] is the phase's full length, and only differs from
+  /// [seconds] when we joined it late. Passing both is what lets the bar start
+  /// part-drained rather than full: a player resuming at 15s of a 30s phase
+  /// sees a half-empty bar emptying at the normal rate, which is exactly what
+  /// everyone who never left is looking at.
+  void _startPhaseTimer(int seconds, {int? totalSeconds}) {
+    final total = totalSeconds ?? seconds;
+
     currentPhaseTimeLimit = seconds;
-    currentTimerKey = 'timer_${currentState}_${DateTime.now().millisecondsSinceEpoch}';
+    currentPhaseStartProgress = total <= 0 ? 1 : (seconds / total).clamp(0.0, 1.0);
+    // A counter, not a timestamp: the key is what remounts the bar, and only a
+    // remount reads `currentPhaseStartProgress` at all -- TweenAnimationBuilder
+    // ignores a changed `begin` on rebuild. Two calls inside the same
+    // millisecond are routine when a resume drains a backlog of buffered
+    // events, and a colliding key would silently keep the earlier bar.
+    currentTimerKey = 'timer_${currentState}_${++_timerEpoch}';
     update([SimpleModeIds.controlPanel]);
   }
 
   void _clearPhaseTimer() {
     currentPhaseTimeLimit = -1;
+    currentPhaseStartProgress = 1;
   }
 }

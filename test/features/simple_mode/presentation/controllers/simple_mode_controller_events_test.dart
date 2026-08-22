@@ -428,12 +428,63 @@ void main() {
       expect(harness.controller.currentPhaseTimeLimit, 13);
     });
 
+    test('starts the bar part-drained so it empties at the normal rate', () async {
+      // Half a 30s phase left means a half-empty bar with 15s to run. Starting
+      // it full would drain at double speed to catch up, which is what a
+      // reconnecting player used to see while everyone else's bar crawled.
+      await buildRoom();
+
+      harness.controller.applyRoomSnapshot(snapshot(remainingMs: 15000));
+
+      expect(harness.controller.currentPhaseTimeLimit, 15);
+      expect(harness.controller.currentPhaseStartProgress, closeTo(0.5, 0.001));
+    });
+
+    test('starts the bar full when the phase is joined at its start', () async {
+      await buildRoom();
+
+      harness.controller.applyRoomSnapshot(snapshot(remainingMs: 30000));
+
+      expect(harness.controller.currentPhaseStartProgress, 1);
+    });
+
+    test('gets a distinct timer key per phase start, however fast they arrive', () async {
+      // The key is the only thing that remounts the bar, and only a remount
+      // reads currentPhaseStartProgress -- TweenAnimationBuilder ignores a
+      // changed `begin` on rebuild. Draining a backlog of buffered events after
+      // a resume puts several of these in the same phase inside one
+      // millisecond, so a wall-clock key would collide and silently keep the
+      // earlier bar. A burst is the only way to assert that deterministically.
+      await buildRoom();
+
+      final keys = <String>{};
+      for (var i = 0; i < 50; i++) {
+        harness.controller.applyRoomSnapshot(snapshot(remainingMs: 30000 - i));
+        keys.add(harness.controller.currentTimerKey);
+      }
+
+      expect(keys, hasLength(50));
+    });
+
+    test('a later snapshot in the same phase replaces the bar it found', () async {
+      await buildRoom();
+
+      harness.controller.applyRoomSnapshot(snapshot(remainingMs: 30000));
+      final firstKey = harness.controller.currentTimerKey;
+
+      harness.controller.applyRoomSnapshot(snapshot(remainingMs: 12000));
+
+      expect(harness.controller.currentTimerKey, isNot(firstKey));
+      expect(harness.controller.currentPhaseStartProgress, closeTo(0.4, 0.001));
+    });
+
     test('runs no timer in an untimed phase', () async {
       await buildRoom();
 
       harness.controller.applyRoomSnapshot(snapshot(state: GameState.end, remainingMs: 0));
 
       expect(harness.controller.currentPhaseTimeLimit, lessThanOrEqualTo(0));
+      expect(harness.controller.currentPhaseStartProgress, 1);
     });
 
     test('seeds the endgame overlay when the game is already over', () async {
@@ -508,6 +559,7 @@ void main() {
       expect(harness.controller.currentState, GameState.position);
       expect(harness.controller.destroyedTile, hasLength(1));
       expect(harness.controller.currentPhaseTimeLimit, 30);
+      expect(harness.controller.currentPhaseStartProgress, 1, reason: 'a phase joined at its start begins full');
       expect(harness.controller.currentTimerKey, isNotEmpty);
     });
   });
