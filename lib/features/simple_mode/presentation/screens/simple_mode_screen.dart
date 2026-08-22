@@ -149,12 +149,6 @@ class SimpleModeScreen extends GetView<SimpleModeController> {
                     color: retroYellow,
                     fontSize: 24,
                   ),
-                  const SizedBox(height: 16),
-                  const Text(
-                    'Your seat is being held.\nYou are still in the game.',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(color: Colors.white, fontSize: 14, height: 1.6),
-                  ),
                 ] else ...[
                   const Text(
                     'DISCONNECTED',
@@ -169,18 +163,26 @@ class SimpleModeScreen extends GetView<SimpleModeController> {
                   ),
                 ],
                 const SizedBox(height: 24),
+                // Expanded (not spaceEvenly) so the pair always fits the
+                // dialog width -- at a 320pt phone the intrinsic widths
+                // overflow the 224pt content box by 84pt. Capping each cell
+                // lets RetroButton's FittedBox shrink the label instead.
                 Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                   children: [
-                    RetroButton(
-                      text: 'Reconnect',
-                      color: retroGreen,
-                      onPressed: ctl.isReconnecting ? null : ctl.rejoinRoom,
+                    Expanded(
+                      child: RetroButton(
+                        text: 'Reconnect',
+                        color: retroGreen,
+                        onPressed: ctl.isReconnecting ? null : ctl.rejoinRoom,
+                      ),
                     ),
-                    RetroButton(
-                      text: 'Leave',
-                      color: retroRed,
-                      onPressed: ctl.abandonRoom,
+                    const SizedBox(width: 16),
+                    Expanded(
+                      child: RetroButton(
+                        text: 'Leave',
+                        color: retroRed,
+                        onPressed: ctl.abandonRoom,
+                      ),
                     ),
                   ],
                 ),

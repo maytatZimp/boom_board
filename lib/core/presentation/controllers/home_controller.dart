@@ -193,7 +193,9 @@ class HomeController extends GetxController {
       RetroDialog(
         title: 'Room gone',
         message: 'Room $roomCode no longer exists.',
-        onCancel: () => Get.back(),
+        // Nothing to decide -- the dead slot is already dropped, so this is
+        // news, not a question.
+        onCancel: null,
         onConfirm: () => Get.back(),
       ),
     );
