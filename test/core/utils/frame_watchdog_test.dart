@@ -1,4 +1,5 @@
 import 'package:boom_board/core/utils/frame_watchdog.dart';
+import 'package:boom_board/core/utils/high_res_clock.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 /// The watchdog's whole job is telling "stalled" apart from "idle". Getting it
@@ -14,6 +15,7 @@ void main() {
 
   FrameWatchdogAction decide({
     bool isVisible = true,
+    bool withinResumeGrace = false,
     bool framesEnabled = true,
     bool hasScheduledFrame = false,
     Duration sinceLastFrame = Duration.zero,
@@ -21,6 +23,7 @@ void main() {
   }) {
     return decideFrameWatchdogAction(
       isVisible: isVisible,
+      withinResumeGrace: withinResumeGrace,
       framesEnabled: framesEnabled,
       hasScheduledFrame: hasScheduledFrame,
       sinceLastFrame: sinceLastFrame,
@@ -120,5 +123,68 @@ void main() {
     // state must read as none regardless -- otherwise a recovery in flight
     // would keep pumping after the engine came back.
     expect(decide(recoveryAttempted: true), FrameWatchdogAction.none);
+  });
+
+  group('a page that has only just come back', () {
+    test('is left to the browser while the grace runs', () {
+      // sinceLastFrame spans the entire time the tab was away, so it always
+      // reads as a stall the moment the page returns. Acting on that would
+      // mostly mean interrupting a recovery already under way.
+      expect(
+        decide(
+          withinResumeGrace: true,
+          hasScheduledFrame: true,
+          sinceLastFrame: const Duration(minutes: 5),
+        ),
+        FrameWatchdogAction.none,
+      );
+      expect(
+        decide(withinResumeGrace: true, framesEnabled: false),
+        FrameWatchdogAction.none,
+      );
+    });
+
+    test('is repaired once the grace has run out', () {
+      // Same state, no longer excused: waiting is a delay, not a pardon.
+      expect(
+        decide(hasScheduledFrame: true, sinceLastFrame: const Duration(minutes: 5)),
+        FrameWatchdogAction.pumpFrame,
+      );
+      expect(decide(framesEnabled: false), FrameWatchdogAction.resumeLifecycle);
+    });
+  });
+
+  group('the stamp put on a pumped frame', () {
+    // A stamp that lands ahead of the next real frame makes that frame a step
+    // backwards, and a ticker started on the higher one dies of a negative
+    // elapsed -- permanently, and only that ticker.
+    test('stays behind the clock it is sampled from', () {
+      final watchdog = FrameWatchdog(pumpTimestampMargin: const Duration(milliseconds: 250));
+      expect(watchdog.pumpTimestampMs(), lessThan(highResTimestampMs()));
+    });
+
+    test('never goes backwards across pumps', () {
+      final watchdog = FrameWatchdog();
+      var previous = watchdog.pumpTimestampMs();
+      for (var i = 0; i < 50; i++) {
+        final next = watchdog.pumpTimestampMs();
+        expect(next, greaterThanOrEqualTo(previous));
+        previous = next;
+      }
+    });
+
+    test('does not undercut a frame the engine already delivered', () {
+      // The floor matters most on the lifecycle-stuck path, which pumps
+      // without waiting out the stall threshold -- so a real frame may be more
+      // recent than the margin is wide.
+      // An absurd margin stands in for "a real frame more recent than the
+      // margin", which is the case the floor exists to catch. The threshold
+      // moves with it to keep the constructor's invariant intact.
+      final watchdog = FrameWatchdog(
+        pumpTimestampMargin: const Duration(days: 1),
+        stallThreshold: const Duration(days: 2),
+      );
+      expect(watchdog.pumpTimestampMs(), greaterThanOrEqualTo(0));
+    });
   });
 }

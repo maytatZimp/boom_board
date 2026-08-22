@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:boom_board/core/utils/high_res_clock.dart';
 import 'package:boom_board/core/utils/page_visibility.dart';
@@ -34,6 +35,7 @@ enum FrameWatchdogAction {
 /// missing a stall means staying frozen.
 FrameWatchdogAction decideFrameWatchdogAction({
   required bool isVisible,
+  required bool withinResumeGrace,
   required bool framesEnabled,
   required bool hasScheduledFrame,
   required Duration sinceLastFrame,
@@ -44,6 +46,14 @@ FrameWatchdogAction decideFrameWatchdogAction({
   // would request an animation frame that cannot run, which is precisely how
   // the stuck-flag failure mode gets created.
   if (!isVisible) return FrameWatchdogAction.none;
+
+  // Just back on screen. The browser restarts the pipeline by itself in the
+  // ordinary case, while `sinceLastFrame` is guaranteed to look terrible right
+  // now -- it spans the whole time the tab was away -- so acting on it here
+  // would usually mean intervening in a recovery that was already working.
+  // Waiting costs nothing: a pipeline that is genuinely wedged will still be
+  // wedged a moment from now.
+  if (withinResumeGrace) return FrameWatchdogAction.none;
 
   // scheduleFrame() bailed on !framesEnabled, so it never got as far as
   // recording that a frame was wanted -- the lifecycle is the stuck part.
@@ -94,7 +104,15 @@ class FrameWatchdog {
   FrameWatchdog({
     this.checkInterval = const Duration(milliseconds: 500),
     this.stallThreshold = const Duration(seconds: 1),
-  });
+    this.resumeGrace = const Duration(seconds: 1),
+    this.pumpTimestampMargin = const Duration(milliseconds: 250),
+  }) : assert(
+         pumpTimestampMargin < stallThreshold,
+         'A margin past the stall threshold would put every pumped frame '
+         'behind the last real one, so the floor in pumpTimestampMs() would '
+         'have to clamp it -- and a clamped stamp buys the pump no elapsed '
+         'time at all.',
+       );
 
   /// How often to look for a stall. Two no-op field reads a second, against a
   /// render loop that wakes 60 times a second when it is healthy.
@@ -104,9 +122,35 @@ class FrameWatchdog {
   /// we call it stuck rather than slow.
   final Duration stallThreshold;
 
+  /// How long to leave the browser to its own devices after the page comes
+  /// back on screen.
+  ///
+  /// Returning to a tab normally restarts the pipeline within a frame or two.
+  /// [isPageVisible] flips the instant `visibilitychange` fires, though, which
+  /// can be well before the engine has delivered anything -- so without this
+  /// the first check after a resume would fire into a healthy recovery. The
+  /// cost is that a genuine stall is repaired a beat later.
+  final Duration resumeGrace;
+
+  /// How far behind the wall clock to stamp a frame we drive by hand. See
+  /// [pumpTimestampMs].
+  final Duration pumpTimestampMargin;
+
   Timer? _timer;
   bool _frameCallbackInstalled = false;
   DateTime _lastFrameAt = DateTime.now();
+
+  /// When the page was first observed back on screen, or null once its
+  /// [resumeGrace] has been served.
+  DateTime? _visibleSince;
+  bool _wasVisible = true;
+
+  /// The clock reading taken on the last frame the engine delivered, and the
+  /// highest stamp we have handed out ourselves. A pumped frame is never
+  /// allowed below either -- the first would rewind the engine's timeline, the
+  /// second our own.
+  double _lastRealFrameMs = 0;
+  double _lastPumpedMs = 0;
 
   /// Set while we are driving a frame by hand, so the frame we produce is not
   /// mistaken for proof that the engine recovered.
@@ -128,6 +172,8 @@ class FrameWatchdog {
     if (!kIsWeb) return;
     if (_timer != null) return;
 
+    _wasVisible = isPageVisible();
+
     if (!_frameCallbackInstalled) {
       // Persistent callbacks run on every frame the engine actually delivers,
       // so this stamp is our proof of life. They cannot be removed once added,
@@ -147,16 +193,57 @@ class FrameWatchdog {
   void _onFrame(Duration _) {
     if (_pumping) return;
     _lastFrameAt = DateTime.now();
+    // Sampled rather than read off the callback's own Duration: that one has
+    // been through the scheduler's epoch adjustment and so is not on the same
+    // scale as the raw stamps handleBeginFrame takes. A persistent callback
+    // runs after its frame began, which puts this at or above the frame's real
+    // stamp -- the safe side to err on for a floor.
+    _lastRealFrameMs = highResTimestampMs();
     _recoveryAttempted = false;
     _consecutivePumps = 0;
+  }
+
+  /// The stamp to give a frame we drive ourselves.
+  ///
+  /// [highResTimestampMs] and the timestamp `requestAnimationFrame` hands the
+  /// engine come off the same clock, but they are not ordered against each
+  /// other: rAF reports when its frame *started*, always a little before the
+  /// callback runs. A stamp sampled from a timer can therefore land ahead of
+  /// the next real frame -- and a frame that goes backwards is not a cosmetic
+  /// problem. `AnimationController` measures `now - startTime`, so a ticker
+  /// started on the higher stamp then sees a negative elapsed, throws inside a
+  /// scheduler callback, and is dropped for good: that one animation frozen
+  /// forever while the rest of the app carries on as though nothing happened.
+  ///
+  /// So aim deliberately low. Running behind costs nothing an animation can
+  /// see; running ahead is unrecoverable.
+  @visibleForTesting
+  double pumpTimestampMs() {
+    final biased = highResTimestampMs() - pumpTimestampMargin.inMicroseconds / 1000;
+
+    // Never below a stamp already in use. Repeating one is survivable -- that
+    // pump simply measures no elapsed time -- where going under one is not.
+    final floor = math.max(_lastRealFrameMs, _lastPumpedMs);
+
+    return _lastPumpedMs = math.max(biased, floor);
   }
 
   @visibleForTesting
   void check() {
     final binding = SchedulerBinding.instance;
+    final isVisible = isPageVisible();
+
+    if (isVisible && !_wasVisible) _visibleSince = DateTime.now();
+    _wasVisible = isVisible;
+
+    final visibleSince = _visibleSince;
+    final withinResumeGrace =
+        visibleSince != null && DateTime.now().difference(visibleSince) < resumeGrace;
+    if (!withinResumeGrace) _visibleSince = null;
 
     final action = decideFrameWatchdogAction(
-      isVisible: isPageVisible(),
+      isVisible: isVisible,
+      withinResumeGrace: withinResumeGrace,
       framesEnabled: binding.framesEnabled,
       hasScheduledFrame: binding.hasScheduledFrame,
       sinceLastFrame: DateTime.now().difference(_lastFrameAt),
@@ -209,10 +296,9 @@ class FrameWatchdog {
       // Must be a real timestamp. Passing null reuses the previous frame's,
       // and every pumped frame carrying the same one means tickers measure no
       // elapsed time -- the whole app renders and responds while every
-      // animation sits frozen on a single frame. This clock is the one
-      // requestAnimationFrame draws from, so pumped and real frames stay
-      // continuous when the engine comes back.
-      binding.handleBeginFrame(Duration(microseconds: (highResTimestampMs() * 1000).round()));
+      // animation sits frozen on a single frame. See [pumpTimestampMs] for why
+      // it is deliberately a little behind the clock.
+      binding.handleBeginFrame(Duration(microseconds: (pumpTimestampMs() * 1000).round()));
       binding.handleDrawFrame();
     } finally {
       _pumping = false;
