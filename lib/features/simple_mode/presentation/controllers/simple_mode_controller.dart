@@ -156,6 +156,21 @@ class SimpleModeController extends GetxController {
     return localPlayer?.name ?? GetIt.I<IdentityStore>().credentials?.playerName ?? '';
   }
 
+  /// The room to present when re-entering. Prefers the credential slot: it
+  /// records the last entry the server actually bound this socket to, so if the
+  /// two ever disagree (two entries racing each other) the slot is the one that
+  /// matches the seat we are trying to reclaim.
+  ///
+  /// Only ever a bootstrap. A rejoin writes the room it actually landed in back
+  /// to [roomCode], so the two can only disagree until the next one completes
+  /// -- long enough to aim the rejoin, never long enough to leave the screen
+  /// naming one room while the seat lives in another.
+  String get _roomToReclaim {
+    final stored = GetIt.I<IdentityStore>().credentials?.roomCode;
+    if (stored != null && stored.isNotEmpty) return stored;
+    return roomCode;
+  }
+
   bool get isReconnecting => connectionState == RoomConnectionState.reconnecting;
 
   bool get isConnectionLost => connectionState != RoomConnectionState.connected;
@@ -175,18 +190,19 @@ class SimpleModeController extends GetxController {
   @override
   void onInit() {
     super.onInit();
-    if (Get.arguments is! SimpleModeArguments) {
-      Get.offAllNamed(home);
+
+    final args = Get.arguments;
+    if (args is SimpleModeArguments) {
+      roomCode = args.roomCode;
+      hostId = args.hostId;
+      playerList = args.playerList;
+      spectatorList = args.spectatorList;
+      isSpectator = args.isSpectator;
+
+      subscribeListener();
+    } else if (!_recoverRoomWithoutArguments()) {
       return;
     }
-    final args = Get.arguments as SimpleModeArguments;
-    roomCode = args.roomCode;
-    hostId = args.hostId;
-    playerList = args.playerList;
-    spectatorList = args.spectatorList;
-    isSpectator = args.isSpectator;
-
-    subscribeListener();
 
     // A mid-game entry gets its snapshot the instant the server acks, which is
     // before this controller exists. Pick up anything that landed in the gap.
@@ -194,6 +210,83 @@ class SimpleModeController extends GetxController {
     if (pendingSnapshot != null) {
       applyRoomSnapshot(pendingSnapshot);
     }
+  }
+
+  /// Rebuilds the room from the credential slot when the route arguments are
+  /// gone, returning false when there is nothing left to rebuild from.
+  ///
+  /// The arguments can genuinely go missing: `Get.arguments` is one global slot
+  /// that every dialog, bottom sheet and snackbar overwrites while it is open,
+  /// and it is read here -- from the route's first build -- a frame *after* the
+  /// push that filled it. A frame that never comes (backgrounded mobile Chrome)
+  /// stretches that gap indefinitely. The seat on the server is already taken
+  /// by then, so bouncing home over it leaves a body on the board that nobody
+  /// is driving.
+  ///
+  /// The credential slot is the copy that can be trusted: create/join both
+  /// persist it *before* this route is ever pushed, and it survives a reload.
+  /// Everything else the arguments carried -- roster, host, phase, board, our
+  /// own tile -- comes back in the snapshot.
+  bool _recoverRoomWithoutArguments() {
+    final creds = GetIt.I<IdentityStore>().credentials;
+    if (creds == null || creds.roomCode.isEmpty) {
+      logger.e('Entered the room screen with no arguments and no credentials.');
+      _bailOutToHome();
+      return false;
+    }
+
+    logger.w('Route arguments were lost. Rebuilding room ${creds.roomCode} from the snapshot.');
+    roomCode = creds.roomCode;
+
+    subscribeListener();
+    _hydrateFromSnapshot();
+
+    return true;
+  }
+
+  /// Fills in everything the lost arguments were carrying.
+  ///
+  /// Until the snapshot lands there is no roster, no host and no phase, so this
+  /// borrows the reconnect overlay rather than presenting an empty lobby that
+  /// invites taps. `applyRoomSnapshot` clears it.
+  ///
+  /// A snapshot is the cheap way back in -- it skips the `playerReconnected`
+  /// broadcast and the progression re-check a full join fires at everyone else
+  /// -- but the server answers it from the binding it made at join time, so it
+  /// only works while *this* socket still holds the seat. A socket that dropped
+  /// and has not rejoined yet holds nothing, and the request is refused. That
+  /// is not a dead end: it just means the seat has to be reclaimed the long
+  /// way, which is what `rejoinRoom` does -- with the very credentials this
+  /// recovery has already validated, and owning the overlay and the per-error
+  /// messaging on the way.
+  Future<void> _hydrateFromSnapshot() async {
+    connectionState = RoomConnectionState.reconnecting;
+    connectionError = null;
+    update([SimpleModeIds.connectionOverlay]);
+
+    try {
+      await GetIt.I<RequestSnapshotUseCase>().call();
+    } catch (e, stackTrace) {
+      logger.w('Snapshot rebuild failed. Reclaiming the seat instead.', error: e, stackTrace: stackTrace);
+      await rejoinRoom();
+    }
+  }
+
+  /// Gives up the seat and goes home, for when even the credentials are gone.
+  ///
+  /// Both halves are deliberate. `leaveRoom` is keyed on the socket rather than
+  /// on our identity, so it still releases the seat we can no longer name --
+  /// without it the server keeps waiting on a player who is not there and every
+  /// round burns the full phase timer. And the redirect is deferred out of the
+  /// build: onInit runs while this route is being built, and navigating from
+  /// there makes GetX file this controller under the *home* route instead of
+  /// this one. It would then never be cleaned up, and since `Get.put` refuses
+  /// to replace a live registration, every later join this session would be
+  /// handed this same half-built controller -- an empty room code, no
+  /// listeners, nothing to play with.
+  void _bailOutToHome() {
+    leaveRoom();
+    WidgetsBinding.instance.addPostFrameCallback((_) => Get.offAllNamed(home));
   }
 
   @override
@@ -277,6 +370,14 @@ class SimpleModeController extends GetxController {
     }
   }
 
+  /// True when the server refused an action because this socket holds no seat.
+  ///
+  /// The binding is gone, so nothing this client sends can land until the seat
+  /// is reclaimed -- and reclaiming it is the same move the lost-arguments
+  /// recovery makes. Worth separating from an ordinary failure, which a retry
+  /// of the action itself would fix.
+  bool _isUnseated(Object e) => e is BBServerException && e.errorType == 'PLAYER_IS_NOT_IN_A_ROOM';
+
   void startGame() async {
     if (playerList.length <= 1) return;
     if (isHost) {
@@ -284,6 +385,7 @@ class SimpleModeController extends GetxController {
         await GetIt.I<StartGameUseCase>().call(StartGameParams(roomCode: roomCode));
       } catch (e, stackTrace) {
         logger.e('startGame error.', error: e, stackTrace: stackTrace);
+        if (_isUnseated(e)) rejoinRoom();
       }
     }
   }
@@ -358,6 +460,7 @@ class SimpleModeController extends GetxController {
       await GetIt.I<ResetGameUseCase>().call(ResetGameParams(roomCode: roomCode));
     } catch (e, stackTrace) {
       logger.e('backToLobby error.', error: e, stackTrace: stackTrace);
+      if (_isUnseated(e)) rejoinRoom();
     }
   }
 
@@ -737,7 +840,7 @@ class SimpleModeController extends GetxController {
   }
 
   void _onSocketReconnected(SocketConnectedEvent event) {
-    logger.d('Socket is back up. Reclaiming our seat in $roomCode.');
+    logger.d('Socket is back up. Reclaiming our seat in $_roomToReclaim.');
     // The socket came back with a fresh id and no idea who we are, so the seat
     // is only ours again once joinRoom validates the stored credentials.
     rejoinRoom();
@@ -755,12 +858,16 @@ class SimpleModeController extends GetxController {
 
     try {
       final result = await GetIt.I<JoinRoomUseCase>().call(
-        JoinRoomParams(playerName: localPlayerName, roomCode: roomCode),
+        JoinRoomParams(playerName: localPlayerName, roomCode: _roomToReclaim),
       );
 
       // Only the fields the snapshot doesn't carry are taken from the ack --
       // the private roomSnapshot that follows is the authoritative view and
-      // will overwrite the rest.
+      // will overwrite the rest. The room code is one of them, and taking it
+      // here is what stops `roomCode` and the credential slot drifting apart:
+      // whichever room we actually landed in becomes the only one on record,
+      // rather than the screen naming one room while the seat sits in another.
+      roomCode = result.roomCode;
       isSpectator = result.isSpectator;
       hostId = result.hostId;
 

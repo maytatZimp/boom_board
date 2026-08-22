@@ -1,3 +1,4 @@
+import 'package:boom_board/core/data/data_source/identity_store.dart';
 import 'package:boom_board/core/data/models/enums/game_mode.dart';
 import 'package:boom_board/core/domain/entities/join_room_entity.dart';
 import 'package:boom_board/core/domain/entities/player_entity.dart';
@@ -44,9 +45,10 @@ void main() {
   JoinRoomEntity rejoinResult({
     String hostId = localId,
     bool isSpectator = false,
+    String roomCode = 'ABCD',
   }) {
     return JoinRoomEntity(
-      roomCode: 'ABCD',
+      roomCode: roomCode,
       gameMode: GameMode.simple,
       hostId: hostId,
       playerList: [
@@ -140,6 +142,28 @@ void main() {
 
       expect(harness.controller.hostId, 'p-2');
       expect(harness.controller.isHost, isFalse);
+    });
+
+    test('adopts the room the server actually seated us in', () async {
+      // The credential slot is what a rejoin aims at, and it can name a
+      // different room than the screen is holding -- that is the whole reason
+      // the aim is taken from the slot. Taking the room back off the ack is
+      // what stops the two drifting for good: without it the screen keeps
+      // naming one room while the seat sits in another, and after the server
+      // stopped trusting the client's room code that mismatch is silent.
+      await buildRoom();
+      when(() => harness.identityStore.credentials).thenReturn(
+        RoomCredentials(playerId: localId, secret: 's3cret', roomCode: 'WXYZ', playerName: 'Alice'),
+      );
+      when(() => harness.joinRoom.call(any())).thenAnswer((_) async => rejoinResult(roomCode: 'WXYZ'));
+
+      expect(harness.controller.roomCode, 'ABCD');
+
+      await harness.controller.rejoinRoom();
+
+      final captured = verify(() => harness.joinRoom.call(captureAny())).captured.single as JoinRoomParams;
+      expect(captured.roomCode, 'WXYZ', reason: 'the slot names the seat, so it aims the rejoin');
+      expect(harness.controller.roomCode, 'WXYZ', reason: 'and the ack settles it for everything after');
     });
 
     test('comes back as a spectator when the server says so', () async {

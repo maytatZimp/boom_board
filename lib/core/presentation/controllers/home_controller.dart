@@ -44,6 +44,15 @@ class HomeController extends GetxController {
   /// presence is what turns the start panel into a "Rejoin room ABCD?" prompt.
   RoomCredentials? pendingRejoin;
 
+  /// True while a create/join/rejoin is waiting on the server.
+  ///
+  /// A second tap that gets through is not harmless: the server binds this
+  /// socket to whatever seat the *last* request created, while GetX suppresses
+  /// the second navigation (`Get.toNamed` is a no-op when the route it is asked
+  /// for is already the current one). The screen would then be driving one room
+  /// while the seat lives in another.
+  bool entryInFlight = false;
+
   TextEditingController playerNameTextFieldCtl = TextEditingController();
   TextEditingController roomCodeTextFieldCtl = TextEditingController();
 
@@ -129,9 +138,11 @@ class HomeController extends GetxController {
   void onRejoinPressed() async {
     final creds = pendingRejoin;
     if (creds == null) return;
+    if (entryInFlight) return;
 
     logger.d('onRejoinPressed called for room ${creds.roomCode}');
     panelError = null;
+    entryInFlight = true;
     update([HomeIds.panel]);
 
     try {
@@ -172,6 +183,8 @@ class HomeController extends GetxController {
       logger.e('Rejoin error.', error: e, stackTrace: stackTrace);
       panelError = 'Could not rejoin room ${creds.roomCode}';
       update([HomeIds.panel]);
+    } finally {
+      entryInFlight = false;
     }
   }
 
@@ -238,6 +251,7 @@ class HomeController extends GetxController {
 
   void onCreatePressed() async {
     logger.d('onCreatePressed called');
+    if (entryInFlight) return;
     try {
       panelError = null; // Clear previous errors
       update([HomeIds.panel]);
@@ -248,6 +262,7 @@ class HomeController extends GetxController {
         return;
       }
 
+      entryInFlight = true;
       final result = await GetIt.I<CreateRoomUseCase>().call(
         CreateRoomParams(
           playerName: playerNameTextFieldCtl.text.trim(),
@@ -276,11 +291,14 @@ class HomeController extends GetxController {
       logger.e('SimpleModeCreateRoomUseCase error.', error: e, stackTrace: stackTrace);
       panelError = 'Unknown error occurred';
       update([HomeIds.panel]);
+    } finally {
+      entryInFlight = false;
     }
   }
 
   void onJoinConfirmPressed() async {
     logger.d('onJoinConfirmPressed called');
+    if (entryInFlight) return;
     try {
       panelError = null; // Clear previous errors
       update([HomeIds.panel]);
@@ -297,6 +315,7 @@ class HomeController extends GetxController {
         return;
       }
 
+      entryInFlight = true;
       final result = await GetIt.I<JoinRoomUseCase>().call(
         JoinRoomParams(
           playerName: playerNameTextFieldCtl.text,
@@ -334,6 +353,8 @@ class HomeController extends GetxController {
       logger.e('SimpleModeJoinRoomUseCase error.', error: e, stackTrace: stackTrace);
       panelError = 'Unknown error occurred';
       update([HomeIds.panel]);
+    } finally {
+      entryInFlight = false;
     }
   }
 
