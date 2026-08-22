@@ -9,6 +9,7 @@ import '../../../helpers/mocks.dart';
 void main() {
   late MockRoomServerRepository repository;
   late MockSimpleModeSocketHandler socketHandler;
+  late MockIdentityStore identityStore;
   late LeaveRoomUseCase useCase;
 
   setUpAll(registerTestFallbackValues);
@@ -16,9 +17,11 @@ void main() {
   setUp(() {
     repository = MockRoomServerRepository();
     socketHandler = MockSimpleModeSocketHandler();
+    identityStore = emptyIdentityStore();
     useCase = LeaveRoomUseCase(
       roomServerRepository: repository,
       simpleModeSocketHandler: socketHandler,
+      identityStore: identityStore,
     );
   });
 
@@ -66,6 +69,31 @@ void main() {
       );
 
       verify(() => socketHandler.dispose()).called(1);
+    });
+
+    test('clears the stored credentials, since there is no seat left to reclaim', () async {
+      // Leaving on purpose is the one exit that invalidates the slot. A drop or
+      // a reload keeps it -- that is what makes reconnecting possible at all.
+      when(() => repository.leaveRoom()).thenAnswer((_) async {});
+
+      await useCase.call(LeaveRoomParams(gameMode: GameMode.simple));
+
+      verify(() => identityStore.clear()).called(1);
+    });
+
+    test('clears the credentials even when the server call fails', () async {
+      // Leaving while offline is the common case (that is *why* the socket
+      // call failed), and the player still walks out of the room.
+      when(() => repository.leaveRoom()).thenThrow(
+        BbServerOfflineException(code: 503, errorType: 'SERVER_OFFLINE', data: 'offline'),
+      );
+
+      await expectLater(
+        useCase.call(LeaveRoomParams(gameMode: GameMode.simple)),
+        throwsA(isA<BbServerOfflineException>()),
+      );
+
+      verify(() => identityStore.clear()).called(1);
     });
 
     test('still surfaces the server error to the caller', () async {

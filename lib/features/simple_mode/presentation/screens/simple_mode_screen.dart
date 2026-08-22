@@ -1,6 +1,7 @@
 import 'dart:math' as math;
 
 import 'package:boom_board/core/data/models/coordinate.dart';
+import 'package:boom_board/core/domain/entities/spectator_entity.dart';
 import 'package:boom_board/core/presentation/utils/responsive.dart';
 import 'package:boom_board/core/presentation/widgets/retro_button.dart';
 import 'package:boom_board/core/presentation/widgets/retro_dialog.dart';
@@ -41,8 +42,24 @@ class SimpleModeScreen extends GetView<SimpleModeController> {
       },
       child: Scaffold(
         backgroundColor: retroBackground,
-        body: SafeArea(
-          child: LayoutBuilder(
+        body: Stack(
+          children: [
+            SafeArea(child: _buildRoomLayout()),
+
+            // Sits above everything: while the socket is down the board is
+            // stale, and the seat is being held server-side rather than lost.
+            GetBuilder<SimpleModeController>(
+              id: SimpleModeIds.connectionOverlay,
+              builder: _buildConnectionOverlay,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildRoomLayout() {
+    return LayoutBuilder(
             builder: (context, constraints) {
               // Wide/short viewport -> dashboard beside the board. Narrow/tall
               // (phone portrait) -> dashboard stacked below the board instead,
@@ -100,6 +117,77 @@ class SimpleModeScreen extends GetView<SimpleModeController> {
                 );
               }
             },
+    );
+  }
+
+  // --- CONNECTION-LOST OVERLAY ---
+  // Losing the socket used to bounce the player home. It no longer does: the
+  // server keeps them alive on the board, so this blocks input, explains what
+  // is happening, and offers a manual retry once the automatic ones run out.
+  Widget _buildConnectionOverlay(SimpleModeController ctl) {
+    if (!ctl.isConnectionLost) return const SizedBox.shrink();
+
+    return Positioned.fill(
+      child: ColoredBox(
+        color: Colors.black.withAlpha(220),
+        child: Center(
+          child: Container(
+            constraints: const BoxConstraints(maxWidth: 480),
+            margin: const EdgeInsets.all(24),
+            padding: const EdgeInsets.all(24),
+            decoration: BoxDecoration(
+              color: retroBackground,
+              border: Border.all(color: ctl.isReconnecting ? retroYellow : retroRed, width: 4),
+              boxShadow: const [BoxShadow(color: Colors.black, offset: Offset(8, 8))],
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (ctl.isReconnecting) ...[
+                  const RetroLoadingText(
+                    text: 'Reconnecting',
+                    color: retroYellow,
+                    fontSize: 24,
+                  ),
+                ] else ...[
+                  const Text(
+                    'DISCONNECTED',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(color: retroRed, fontSize: 24),
+                  ),
+                  const SizedBox(height: 16),
+                  Text(
+                    ctl.connectionError ?? 'Lost contact with the server.',
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(color: Colors.white, fontSize: 14, height: 1.6),
+                  ),
+                ],
+                const SizedBox(height: 24),
+                // Expanded (not spaceEvenly) so the pair always fits the
+                // dialog width -- at a 320pt phone the intrinsic widths
+                // overflow the 224pt content box by 84pt. Capping each cell
+                // lets RetroButton's FittedBox shrink the label instead.
+                Row(
+                  children: [
+                    Expanded(
+                      child: RetroButton(
+                        text: 'Reconnect',
+                        color: retroGreen,
+                        onPressed: ctl.isReconnecting ? null : ctl.rejoinRoom,
+                      ),
+                    ),
+                    const SizedBox(width: 16),
+                    Expanded(
+                      child: RetroButton(
+                        text: 'Leave',
+                        color: retroRed,
+                        onPressed: ctl.abandonRoom,
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
           ),
         ),
       ),
@@ -303,15 +391,34 @@ class SimpleModeScreen extends GetView<SimpleModeController> {
     );
   }
 
-  // --- PLAYER ROSTER ---
+  // --- PLAYER ROSTER (+ spectators) ---
   Widget _buildPlayerRoster() {
     return GetBuilder<SimpleModeController>(
       id: SimpleModeIds.playerListPanel,
       builder: (ctl) {
+        // Spectators aren't board participants, so they live below the roster
+        // in their own section rather than mixed in with ranked players.
+        final hasSpectators = ctl.spectatorList.isNotEmpty;
+        final spectatorHeaderIndex = ctl.playerList.length;
+
         return ListView.builder(
           padding: const EdgeInsets.all(16),
-          itemCount: ctl.playerList.length,
+          itemCount: ctl.playerList.length + (hasSpectators ? ctl.spectatorList.length + 1 : 0),
           itemBuilder: (context, index) {
+            if (hasSpectators && index == spectatorHeaderIndex) {
+              return Padding(
+                padding: const EdgeInsets.only(top: 8, bottom: 8),
+                child: Text(
+                  'SPECTATING (${ctl.spectatorList.length})',
+                  style: const TextStyle(color: retroGridLight, fontSize: 12),
+                ),
+              );
+            }
+
+            if (index > spectatorHeaderIndex) {
+              return _buildSpectatorRow(ctl.spectatorList[index - spectatorHeaderIndex - 1]);
+            }
+
             final player = ctl.playerList[index];
 
             // Dead players get a dark red background, alive players get black
@@ -351,6 +458,22 @@ class SimpleModeScreen extends GetView<SimpleModeController> {
           },
         );
       },
+    );
+  }
+
+  Widget _buildSpectatorRow(SpectatorEntity spectator) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Colors.black,
+        border: Border.all(color: retroGridLight, width: 2),
+      ),
+      child: Text(
+        spectator.name,
+        style: const TextStyle(color: retroGridLight, fontSize: 16),
+        overflow: TextOverflow.ellipsis,
+      ),
     );
   }
 
@@ -1171,7 +1294,10 @@ class SimpleModeScreen extends GetView<SimpleModeController> {
               alignment: Alignment.centerLeft,
               child: TweenAnimationBuilder<double>(
                 key: ValueKey(ctl.currentTimerKey), // Restarts when the phase changes
-                tween: Tween<double>(begin: 1.0, end: 0.0),
+                // Starts part-drained when we joined the phase late, so the
+                // bar always empties at one phase-length per full bar rather
+                // than sprinting through whatever time is left.
+                tween: Tween<double>(begin: ctl.currentPhaseStartProgress, end: 0.0),
                 duration: Duration(seconds: ctl.currentPhaseTimeLimit),
                 builder: (context, progress, child) {
                   // Dynamic Color: Green -> Yellow (at 50%) -> Red (at 20%)

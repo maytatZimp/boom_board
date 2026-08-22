@@ -26,6 +26,11 @@ class SimpleModeServerRepositoryImpl implements SimpleModeServerRepository {
   }
 
   @override
+  Future<void> requestSnapshot() async {
+    await socketService.requestSnapshot();
+  }
+
+  @override
   Future<void> resetGame(ResetGameRequest request) async {
     await socketService.resetGame(request);
   }

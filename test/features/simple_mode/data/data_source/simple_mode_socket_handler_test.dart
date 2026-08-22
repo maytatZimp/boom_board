@@ -1,5 +1,6 @@
 import 'package:boom_board/core/data/models/coordinate.dart';
 import 'package:boom_board/core/events/event_bus.dart';
+import 'package:boom_board/features/simple_mode/data/data_source/room_snapshot_cache.dart';
 import 'package:boom_board/features/simple_mode/data/data_source/simple_mode_socket_handler.dart';
 import 'package:boom_board/features/simple_mode/data/models/enum/game_state.dart';
 import 'package:boom_board/features/simple_mode/data/models/enum/log_action_type.dart';
@@ -8,11 +9,15 @@ import 'package:boom_board/features/simple_mode/domain/entities/events/game_over
 import 'package:boom_board/features/simple_mode/domain/entities/events/game_reset_event.dart';
 import 'package:boom_board/features/simple_mode/domain/entities/events/game_started_event.dart';
 import 'package:boom_board/features/simple_mode/domain/entities/events/phase_changed_event.dart';
-import 'package:boom_board/features/simple_mode/domain/entities/events/player_dropped_event.dart';
+import 'package:boom_board/features/simple_mode/domain/entities/events/player_disconnected_event.dart';
 import 'package:boom_board/features/simple_mode/domain/entities/events/player_joined_event.dart';
 import 'package:boom_board/features/simple_mode/domain/entities/events/player_left_event.dart';
 import 'package:boom_board/features/simple_mode/domain/entities/events/player_ready_event.dart';
+import 'package:boom_board/features/simple_mode/domain/entities/events/player_reconnected_event.dart';
+import 'package:boom_board/features/simple_mode/domain/entities/events/player_renamed_event.dart';
+import 'package:boom_board/features/simple_mode/domain/entities/events/room_snapshot_event.dart';
 import 'package:boom_board/features/simple_mode/domain/entities/events/round_resolved_event.dart';
+import 'package:boom_board/features/simple_mode/domain/entities/events/spectator_changed_event.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mocktail/mocktail.dart';
 
@@ -20,11 +25,16 @@ import '../../../../helpers/fixtures.dart';
 import '../../../../helpers/mocks.dart';
 import '../../../../helpers/test_di.dart';
 
-/// The ten events `init()` binds, in the order the handler registers them.
+/// Every event `init()` binds, in the order the handler registers them.
 const boundEvents = <String>[
   'playerJoined',
   'playerLeft',
-  'playerDropped',
+  'playerDisconnected',
+  'playerReconnected',
+  'playerRenamed',
+  'spectatorJoined',
+  'spectatorLeft',
+  'roomSnapshot',
   'gameStarted',
   'playerReady',
   'phaseChanged',
@@ -37,6 +47,7 @@ const boundEvents = <String>[
 void main() {
   late MockSocketService socketService;
   late FakeSocket socket;
+  late RoomSnapshotCache snapshotCache;
   late SimpleModeSocketHandler handler;
 
   setUp(() async {
@@ -44,7 +55,8 @@ void main() {
     socket = FakeSocket();
     socketService = MockSocketService();
     when(() => socketService.socket).thenReturn(socket);
-    handler = SimpleModeSocketHandler(socketService: socketService);
+    snapshotCache = RoomSnapshotCache();
+    handler = SimpleModeSocketHandler(socketService: socketService, roomSnapshotCache: snapshotCache);
   });
 
   tearDown(tearDownTestDependencies);
@@ -57,7 +69,7 @@ void main() {
   }
 
   group('init / dispose', () {
-    test('binds a handler for all ten server events', () {
+    test('binds a handler for every server event', () {
       handler.init();
 
       for (final event in boundEvents) {
@@ -205,13 +217,13 @@ void main() {
     });
   });
 
-  group('onPlayerDropped', () {
+  group('onPlayerDisconnected', () {
     test('maps players, new host and the new log entries', () async {
-      final received = listenFor<PlayerDroppedEvent>();
+      final received = listenFor<PlayerDisconnectedEvent>();
 
-      handler.onPlayerDropped(
+      handler.onPlayerDisconnected(
         socketEnvelope(<String, dynamic>{
-          'droppedPlayerId': 'p-1',
+          'disconnectedPlayerId': 'p-1',
           'newHostId': 'p-2',
           'players': [playerJson(id: 'p-2', name: 'Bob')],
           'newLogs': [actionLogJson(id: 'log-1', type: 'PLAYER_DISCONNECTED')],
@@ -219,9 +231,216 @@ void main() {
       );
       await pumpEventBus();
 
-      expect(received.single.droppedPlayerId, 'p-1');
+      expect(received.single.disconnectedPlayerId, 'p-1');
       expect(received.single.newHostId, 'p-2');
       expect(received.single.newLogs.single.type, LogActionType.playerDisconnected);
+    });
+
+    test('keeps the dropped player alive in the mapped roster', () async {
+      // A disconnect is a connection-status change, never a death -- the wire
+      // payload says so and the mapper must not editorialise.
+      final received = listenFor<PlayerDisconnectedEvent>();
+
+      handler.onPlayerDisconnected(
+        socketEnvelope(<String, dynamic>{
+          'disconnectedPlayerId': 'p-1',
+          'newHostId': 'p-2',
+          'players': [playerJson(id: 'p-1', isAlive: true, isDisconnected: true)],
+          'newLogs': <Map<String, dynamic>>[],
+        }),
+      );
+      await pumpEventBus();
+
+      expect(received.single.playerList.single.isAlive, isTrue);
+      expect(received.single.playerList.single.isDisconnected, isTrue);
+    });
+
+    test('tolerates a null newLogs', () async {
+      // The server sends null rather than [] when there is nothing to log.
+      final received = listenFor<PlayerDisconnectedEvent>();
+
+      handler.onPlayerDisconnected(
+        socketEnvelope(<String, dynamic>{
+          'disconnectedPlayerId': 'p-1',
+          'newHostId': 'p-2',
+          'players': [playerJson(id: 'p-1')],
+          'newLogs': null,
+        }),
+      );
+      await pumpEventBus();
+
+      expect(received.single.newLogs, isEmpty);
+    });
+  });
+
+  group('onPlayerReconnected', () {
+    test('maps the returning player and the refreshed roster', () async {
+      final received = listenFor<PlayerReconnectedEvent>();
+
+      handler.onPlayerReconnected(
+        socketEnvelope(<String, dynamic>{
+          'playerId': 'p-1',
+          'players': [playerJson(id: 'p-1', isAlive: true, isDisconnected: false)],
+        }),
+      );
+      await pumpEventBus();
+
+      expect(received.single.playerId, 'p-1');
+      expect(received.single.playerList.single.isDisconnected, isFalse);
+    });
+  });
+
+  group('onPlayerRenamed', () {
+    test('maps the id and the new display name', () async {
+      final received = listenFor<PlayerRenamedEvent>();
+
+      handler.onPlayerRenamed(
+        socketEnvelope(<String, dynamic>{'playerId': 'p-1', 'name': 'Alice II'}),
+      );
+      await pumpEventBus();
+
+      expect(received.single.playerId, 'p-1');
+      expect(received.single.name, 'Alice II');
+    });
+  });
+
+  group('onSpectatorJoined / onSpectatorLeft', () {
+    test('maps the arriving spectator and the full list', () async {
+      final received = listenFor<SpectatorJoinedEvent>();
+
+      handler.onSpectatorJoined(
+        socketEnvelope(<String, dynamic>{
+          'spectator': spectatorJson(id: 's-1', name: 'Watcher'),
+          'spectators': [spectatorJson(id: 's-1', name: 'Watcher')],
+        }),
+      );
+      await pumpEventBus();
+
+      expect(received.single.spectator.id, 's-1');
+      expect(received.single.spectatorList.single.name, 'Watcher');
+    });
+
+    test('maps a departing spectator down to an empty list', () async {
+      final received = listenFor<SpectatorLeftEvent>();
+
+      handler.onSpectatorLeft(
+        socketEnvelope(<String, dynamic>{
+          'spectatorId': 's-1',
+          'spectators': <Map<String, dynamic>>[],
+        }),
+      );
+      await pumpEventBus();
+
+      expect(received.single.spectatorId, 's-1');
+      expect(received.single.spectatorList, isEmpty);
+    });
+  });
+
+  group('onRoomSnapshot', () {
+    test('maps the public room state a returning client needs', () async {
+      final received = listenFor<RoomSnapshotEvent>();
+
+      handler.onRoomSnapshot(
+        socketEnvelope(
+          roomSnapshotJson(
+            state: 'attack',
+            roundNumber: 3,
+            remainingMs: 12450,
+            players: [playerJson(id: 'p-1', throwOrder: 1)],
+            spectators: [spectatorJson()],
+          ),
+        ),
+      );
+      await pumpEventBus();
+
+      final snapshot = received.single;
+      expect(snapshot.state, GameState.attack);
+      expect(snapshot.roundNumber, 3);
+      expect(snapshot.remainingMs, 12450);
+      expect(snapshot.spectatorList.single.id, 'spec-1');
+      // throwOrder is what tells the roster this player has already thrown.
+      expect(snapshot.playerList.single.hasThrowBomb, isTrue);
+    });
+
+    test('maps the private `you` block for a player', () async {
+      final received = listenFor<RoomSnapshotEvent>();
+
+      handler.onRoomSnapshot(
+        socketEnvelope(
+          roomSnapshotJson(
+            you: snapshotSelfJson(x: 4, y: 2, bombTarget: coordinateJson(x: 5, y: 5), throwOrder: 1),
+          ),
+        ),
+      );
+      await pumpEventBus();
+
+      final self = received.single.you!;
+      expect(self.x, 4);
+      expect(self.y, 2);
+      expect(self.bombTarget, Coordinate(x: 5, y: 5));
+      expect(self.throwOrder, 1);
+    });
+
+    test('leaves `you` null for a spectator', () async {
+      // A spectator has no seat, so the private block is simply absent rather
+      // than sent full of nulls.
+      final received = listenFor<RoomSnapshotEvent>();
+
+      handler.onRoomSnapshot(socketEnvelope(roomSnapshotJson(isSpectator: true)));
+      await pumpEventBus();
+
+      expect(received.single.isSpectator, isTrue);
+      expect(received.single.you, isNull);
+    });
+
+    test('maps ranking and winner position when the game is over', () async {
+      final received = listenFor<RoomSnapshotEvent>();
+
+      handler.onRoomSnapshot(
+        socketEnvelope(
+          roomSnapshotJson(
+            state: 'end',
+            ranking: [resultJson(rank: 1, id: 'p-1')],
+            winnerPosition: coordinateJson(x: 2, y: 5),
+          ),
+        ),
+      );
+      await pumpEventBus();
+
+      expect(received.single.state, GameState.end);
+      expect(received.single.ranking.single.rank, 1);
+      expect(received.single.winnerPosition, Coordinate(x: 2, y: 5));
+    });
+
+    test('tolerates a null winner position', () async {
+      // The server sends null when no living, positioned player exists yet.
+      final received = listenFor<RoomSnapshotEvent>();
+
+      handler.onRoomSnapshot(
+        socketEnvelope(roomSnapshotJson(state: 'end', ranking: [resultJson()])),
+      );
+      await pumpEventBus();
+
+      expect(received.single.winnerPosition, isNull);
+    });
+
+    test('parks the snapshot in the cache as well as firing it', () async {
+      // On a mid-game entry this lands while the client is still on the home
+      // screen, so the bus has no listener yet and the cache is the only copy.
+      handler.onRoomSnapshot(socketEnvelope(roomSnapshotJson()));
+      await pumpEventBus();
+
+      final cached = snapshotCache.take();
+      expect(cached, isNotNull);
+      expect(cached!.roundNumber, 3);
+    });
+
+    test('the cache hands a snapshot out exactly once', () async {
+      handler.onRoomSnapshot(socketEnvelope(roomSnapshotJson()));
+      await pumpEventBus();
+
+      expect(snapshotCache.take(), isNotNull);
+      expect(snapshotCache.take(), isNull);
     });
   });
 
@@ -437,7 +656,12 @@ void main() {
       // socket's receive loop.
       expect(() => handler.onPlayerJoined(1), returnsNormally);
       expect(() => handler.onPlayerLeft(1), returnsNormally);
-      expect(() => handler.onPlayerDropped(1), returnsNormally);
+      expect(() => handler.onPlayerDisconnected(1), returnsNormally);
+      expect(() => handler.onPlayerReconnected(1), returnsNormally);
+      expect(() => handler.onPlayerRenamed(1), returnsNormally);
+      expect(() => handler.onSpectatorJoined(1), returnsNormally);
+      expect(() => handler.onSpectatorLeft(1), returnsNormally);
+      expect(() => handler.onRoomSnapshot(1), returnsNormally);
       expect(() => handler.onGameStarted(1), returnsNormally);
       expect(() => handler.onPlayerReady(1), returnsNormally);
       expect(() => handler.onPhaseChanged(1), returnsNormally);

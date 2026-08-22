@@ -1,1 +1,1 @@
-enum HomePanelType { start, host, join }
+enum HomePanelType { start, host, join, rejoin }

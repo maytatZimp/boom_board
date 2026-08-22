@@ -13,6 +13,7 @@ Map<String, dynamic> playerJson({
   bool isAlive = true,
   bool hasPositioned = false,
   bool isDisconnected = false,
+  int? throwOrder,
 }) {
   return <String, dynamic>{
     'id': id,
@@ -20,7 +21,15 @@ Map<String, dynamic> playerJson({
     'isAlive': isAlive,
     'hasPositioned': hasPositioned,
     'isDisconnected': isDisconnected,
+    'throwOrder': throwOrder,
   };
+}
+
+Map<String, dynamic> spectatorJson({
+  String id = 'spec-1',
+  String name = 'Watcher',
+}) {
+  return <String, dynamic>{'id': id, 'name': name};
 }
 
 Map<String, dynamic> coordinateJson({int x = 0, int y = 0}) {
@@ -78,12 +87,20 @@ Map<String, dynamic> createRoomResponseJson({
   String gameMode = 'simple',
   String hostId = 'player-1',
   List<Map<String, dynamic>>? players,
+  List<Map<String, dynamic>>? spectators,
+  String playerId = 'player-1',
+  String secret = 'sh-sh-secret',
+  bool isSpectator = false,
 }) {
   return <String, dynamic>{
     'roomCode': roomCode,
     'gameMode': gameMode,
     'hostId': hostId,
     'players': players ?? [playerJson()],
+    'spectators': spectators ?? <Map<String, dynamic>>[],
+    'playerId': playerId,
+    'secret': secret,
+    'isSpectator': isSpectator,
   };
 }
 
@@ -92,12 +109,80 @@ Map<String, dynamic> joinRoomResponseJson({
   String gameMode = 'simple',
   String hostId = 'player-1',
   List<Map<String, dynamic>>? players,
+  List<Map<String, dynamic>>? spectators,
+  String playerId = 'player-2',
+  String secret = 'sh-sh-secret',
+  bool isSpectator = false,
 }) {
   return <String, dynamic>{
     'roomCode': roomCode,
     'gameMode': gameMode,
     'hostId': hostId,
     'players': players ?? [playerJson(), playerJson(id: 'player-2', name: 'Bob')],
+    'spectators': spectators ?? <Map<String, dynamic>>[],
+    'playerId': playerId,
+    'secret': secret,
+    'isSpectator': isSpectator,
+  };
+}
+
+/// The private snapshot sent to a socket entering a running room. A superset
+/// payload: `you` is present only for a player, `ranking`/`winnerPosition` only
+/// at `end`.
+Map<String, dynamic> roomSnapshotJson({
+  String state = 'attack',
+  int roundNumber = 3,
+  int width = 8,
+  int height = 8,
+  List<Map<String, dynamic>>? destroyedTiles,
+  int timeLimit = 30,
+  int remainingMs = 12450,
+  String hostId = 'player-1',
+  List<Map<String, dynamic>>? players,
+  List<Map<String, dynamic>>? spectators,
+  List<Map<String, dynamic>>? logs,
+  bool isSpectator = false,
+  Map<String, dynamic>? you,
+  List<Map<String, dynamic>>? ranking,
+  Map<String, dynamic>? winnerPosition,
+}) {
+  return <String, dynamic>{
+    'state': state,
+    'roundNumber': roundNumber,
+    'boardSize': <String, dynamic>{'width': width, 'height': height},
+    'destroyedTiles': destroyedTiles ?? [coordinateJson(x: 0, y: 1)],
+    'timeLimit': timeLimit,
+    'remainingMs': remainingMs,
+    'hostId': hostId,
+    'players': players ?? [playerJson()],
+    'spectators': spectators ?? <Map<String, dynamic>>[],
+    'logs': logs ?? <Map<String, dynamic>>[],
+    'isSpectator': isSpectator,
+    // Omitted, not nulled: `you` is absent for a spectator and the endgame
+    // fields are absent outside the end phase, which is what the wire does.
+    'you': ?you,
+    'ranking': ?ranking,
+    'winnerPosition': ?winnerPosition,
+  };
+}
+
+/// The `you` block of a snapshot: everything about the recipient's own seat
+/// that the public roster never carries.
+Map<String, dynamic> snapshotSelfJson({
+  int? x = 4,
+  int? y = 2,
+  bool hasPositioned = true,
+  Map<String, dynamic>? bombTarget,
+  int? throwOrder,
+  bool isAlive = true,
+}) {
+  return <String, dynamic>{
+    'x': x,
+    'y': y,
+    'hasPositioned': hasPositioned,
+    'bombTarget': bombTarget,
+    'throwOrder': throwOrder,
+    'isAlive': isAlive,
   };
 }
 

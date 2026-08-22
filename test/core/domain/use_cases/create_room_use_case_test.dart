@@ -11,6 +11,7 @@ import '../../../helpers/mocks.dart';
 void main() {
   late MockRoomServerRepository repository;
   late MockSimpleModeSocketHandler socketHandler;
+  late MockIdentityStore identityStore;
   late CreateRoomUseCase useCase;
 
   CreateRoomEntity entity() {
@@ -27,6 +28,10 @@ void main() {
           isDisconnected: false,
         ),
       ],
+      spectatorList: const [],
+      playerId: 'p-1',
+      secret: 'sh-sh-secret',
+      isSpectator: false,
     );
   }
 
@@ -35,9 +40,11 @@ void main() {
   setUp(() {
     repository = MockRoomServerRepository();
     socketHandler = MockSimpleModeSocketHandler();
+    identityStore = emptyIdentityStore();
     useCase = CreateRoomUseCase(
       roomServerRepository: repository,
       simpleModeSocketHandler: socketHandler,
+      identityStore: identityStore,
     );
   });
 
@@ -62,18 +69,37 @@ void main() {
       expect(result.playerList.single.name, 'Alice');
     });
 
-    test('binds the simple-mode socket handlers exactly once on success', () async {
-      // GameMode has a single value today, so the `== GameMode.simple` branch
-      // cannot currently be driven the other way. This pins the behaviour that
-      // exists; adding a second mode is what makes the negative case testable.
+    test('persists the minted credentials against the new room', () async {
       when(() => repository.createRoom(any())).thenAnswer((_) async => entity());
 
       await useCase.call(CreateRoomParams(playerName: 'Alice'));
 
-      verify(() => socketHandler.init()).called(1);
+      verify(
+        () => identityStore.save(
+          playerId: 'p-1',
+          secret: 'sh-sh-secret',
+          roomCode: 'ABCD',
+          playerName: 'Alice',
+        ),
+      ).called(1);
     });
 
-    test('does not bind handlers when the repository throws', () async {
+    test('binds the simple-mode socket handlers before the request goes out', () async {
+      // The server may emit a private roomSnapshot the instant it acks, so a
+      // handler bound after the await could miss it entirely.
+      when(() => repository.createRoom(any())).thenAnswer((_) async => entity());
+
+      await useCase.call(CreateRoomParams(playerName: 'Alice'));
+
+      verifyInOrder([
+        () => socketHandler.init(),
+        () => repository.createRoom(any()),
+      ]);
+    });
+
+    test('unbinds the handlers again when the repository throws', () async {
+      // Binding early means the failure path has to clean up, or the next
+      // create/join would double-register every handler.
       when(() => repository.createRoom(any())).thenThrow(Exception('server offline'));
 
       await expectLater(
@@ -81,7 +107,25 @@ void main() {
         throwsA(isA<Exception>()),
       );
 
-      verifyNever(() => socketHandler.init());
+      verify(() => socketHandler.dispose()).called(1);
+    });
+
+    test('does not persist credentials when the create fails', () async {
+      when(() => repository.createRoom(any())).thenThrow(Exception('server offline'));
+
+      await expectLater(
+        useCase.call(CreateRoomParams(playerName: 'Alice')),
+        throwsA(isA<Exception>()),
+      );
+
+      verifyNever(
+        () => identityStore.save(
+          playerId: any(named: 'playerId'),
+          secret: any(named: 'secret'),
+          roomCode: any(named: 'roomCode'),
+          playerName: any(named: 'playerName'),
+        ),
+      );
     });
 
     test('propagates the repository error rather than swallowing it', () async {
@@ -93,17 +137,14 @@ void main() {
       );
     });
 
-    test('binds handlers again on a second create, without unbinding first', () async {
-      // Each create unconditionally calls init(). Nothing here calls dispose(),
-      // so a create -> leave(failed) -> create sequence leaves two sets of
-      // handlers bound. See leave_room_use_case_test.dart for the other half.
+    test('rebinds cleanly on a second create', () async {
+      // init() unbinds first, so repeated creates can't stack handlers.
       when(() => repository.createRoom(any())).thenAnswer((_) async => entity());
 
       await useCase.call(CreateRoomParams(playerName: 'Alice'));
       await useCase.call(CreateRoomParams(playerName: 'Alice'));
 
       verify(() => socketHandler.init()).called(2);
-      verifyNever(() => socketHandler.dispose());
     });
   });
 }

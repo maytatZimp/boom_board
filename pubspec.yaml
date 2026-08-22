@@ -17,6 +17,11 @@ dependencies:
   logger: ^2.7.0
   flutter_dotenv: ^6.0.1
   event_bus: ^2.0.1
+  shared_preferences: ^2.5.3
+  # Read document.visibilityState directly: the engine's mapping of browser
+  # visibility onto AppLifecycleState is the thing FrameWatchdog repairs, so it
+  # cannot also be the thing FrameWatchdog trusts.
+  web: ^1.1.1
 
 dev_dependencies:
   flutter_test:

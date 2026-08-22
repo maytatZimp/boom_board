@@ -9,6 +9,7 @@ extension PlayerModelExtension on PlayerModel {
       isAlive: isAlive,
       hasPositioned: hasPositioned,
       isDisconnected: isDisconnected,
+      throwOrder: throwOrder,
     );
   }
 }
@@ -21,6 +22,7 @@ extension PlayerEntityExtension on PlayerEntity {
       isAlive: isAlive,
       hasPositioned: hasPositioned,
       isDisconnected: isDisconnected,
+      throwOrder: throwOrder,
     );
   }
 }

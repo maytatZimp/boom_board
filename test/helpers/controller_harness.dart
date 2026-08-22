@@ -1,6 +1,10 @@
+import 'package:boom_board/core/data/data_source/identity_store.dart';
 import 'package:boom_board/core/domain/use_cases/get_current_player_id_use_case.dart';
+import 'package:boom_board/core/domain/use_cases/join_room_use_case.dart';
 import 'package:boom_board/core/domain/use_cases/leave_room_use_case.dart';
 import 'package:boom_board/features/simple_mode/domain/entities/simple_mode_player_entity.dart';
+import 'package:boom_board/features/simple_mode/domain/use_cases/consume_room_snapshot_use_case.dart';
+import 'package:boom_board/features/simple_mode/domain/use_cases/request_snapshot_use_case.dart';
 import 'package:boom_board/features/simple_mode/domain/use_cases/reset_game_use_case.dart';
 import 'package:boom_board/features/simple_mode/domain/use_cases/set_position_use_case.dart';
 import 'package:boom_board/features/simple_mode/domain/use_cases/start_game_use_case.dart';
@@ -28,8 +32,12 @@ class SimpleModeControllerHarness {
   late final MockStartGameUseCase startGame;
   late final MockSetPositionUseCase setPosition;
   late final MockThrowBombUseCase throwBomb;
+  late final MockRequestSnapshotUseCase requestSnapshot;
   late final MockResetGameUseCase resetGame;
   late final MockLeaveRoomUseCase leaveRoom;
+  late final MockJoinRoomUseCase joinRoom;
+  late final MockConsumeRoomSnapshotUseCase consumeSnapshot;
+  late final MockIdentityStore identityStore;
 
   /// Builds the controller with [players] already in the room.
   ///
@@ -46,13 +54,19 @@ class SimpleModeControllerHarness {
     startGame = MockStartGameUseCase();
     setPosition = MockSetPositionUseCase();
     throwBomb = MockThrowBombUseCase();
+    requestSnapshot = MockRequestSnapshotUseCase();
     resetGame = MockResetGameUseCase();
     leaveRoom = MockLeaveRoomUseCase();
+    joinRoom = MockJoinRoomUseCase();
+    consumeSnapshot = MockConsumeRoomSnapshotUseCase();
+    identityStore = emptyIdentityStore();
 
     when(() => getCurrentPlayerId.call()).thenReturn(localId);
+    when(() => consumeSnapshot.call()).thenReturn(null);
     when(() => startGame.call(any())).thenAnswer((_) async {});
     when(() => setPosition.call(any())).thenAnswer((_) async {});
     when(() => throwBomb.call(any())).thenAnswer((_) async => 1);
+    when(() => requestSnapshot.call()).thenAnswer((_) async {});
     when(() => resetGame.call(any())).thenAnswer((_) async {});
     when(() => leaveRoom.call(any())).thenAnswer((_) async {});
 
@@ -60,8 +74,12 @@ class SimpleModeControllerHarness {
     GetIt.I.registerSingleton<StartGameUseCase>(startGame);
     GetIt.I.registerSingleton<SetPositionUseCase>(setPosition);
     GetIt.I.registerSingleton<ThrowBombUseCase>(throwBomb);
+    GetIt.I.registerSingleton<RequestSnapshotUseCase>(requestSnapshot);
     GetIt.I.registerSingleton<ResetGameUseCase>(resetGame);
     GetIt.I.registerSingleton<LeaveRoomUseCase>(leaveRoom);
+    GetIt.I.registerSingleton<JoinRoomUseCase>(joinRoom);
+    GetIt.I.registerSingleton<ConsumeRoomSnapshotUseCase>(consumeSnapshot);
+    GetIt.I.registerSingleton<IdentityStore>(identityStore);
 
     controller = SimpleModeController();
     controller.roomCode = roomCode;
