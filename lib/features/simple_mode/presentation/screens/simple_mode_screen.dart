@@ -194,6 +194,35 @@ class SimpleModeScreen extends GetView<SimpleModeController> {
     );
   }
 
+  // --- ROOM-CODE COPY ---
+  // On web the clipboard write rejects outside a secure context (anything but
+  // localhost/https -- e.g. a phone hitting the dev server over the LAN) and
+  // when the browser denies permission. That rejection used to swallow the
+  // whole callback, so the tap looked dead: nothing copied, no feedback. Copy
+  // and feedback are now separated -- the player always gets a toast, and when
+  // the write fails the toast carries the code so it can be read out or typed.
+  Future<void> _copyRoomCode() async {
+    final code = controller.roomCode;
+    var copied = true;
+
+    try {
+      await Clipboard.setData(ClipboardData(text: code));
+    } catch (e) {
+      copied = false;
+      controller.logger.w('Clipboard write failed for room $code: $e');
+    }
+
+    Get.snackbar(
+      copied ? 'Copied!' : 'Room code: $code',
+      copied ? 'Room code copied to clipboard.' : "Couldn't reach the clipboard -- copy it by hand.",
+      backgroundColor: copied ? retroGreen : retroYellow,
+      colorText: Colors.black,
+      snackPosition: SnackPosition.BOTTOM,
+      margin: const EdgeInsets.all(16),
+      duration: const Duration(seconds: 2),
+    );
+  }
+
   // --- SHARED LEAVE-ROOM CONFIRMATION (X button + OS back/back-swipe) ---
   void _confirmLeaveRoom() {
     if (Get.isDialogOpen ?? false) return;
@@ -224,7 +253,7 @@ class SimpleModeScreen extends GetView<SimpleModeController> {
   // was derived from) -- they move into a bottom sheet instead.
   static const double _kCompactDashboardHeight = 320;
 
-  // --- THE DASHBOARD (leave/room-code header, phase banner, roster, action log) ---
+  // --- THE DASHBOARD (leave/room-code header, phase banner, roster, log feed) ---
   Widget _buildDashboard() {
     return LayoutBuilder(
       builder: (context, constraints) {
@@ -248,21 +277,7 @@ class SimpleModeScreen extends GetView<SimpleModeController> {
                     child: RetroButton(
                       text: 'Code\n${controller.roomCode}',
                       color: retroCyan,
-                      onPressed: () async {
-                        // Copy to clipboard
-                        await Clipboard.setData(ClipboardData(text: controller.roomCode));
-
-                        // Show a quick retro snackbar feedback
-                        Get.snackbar(
-                          'Copied!',
-                          'Room code copied to clipboard.',
-                          backgroundColor: retroGreen,
-                          colorText: Colors.black,
-                          snackPosition: SnackPosition.BOTTOM,
-                          margin: const EdgeInsets.all(16),
-                          duration: const Duration(seconds: 2),
-                        );
-                      },
+                      onPressed: () => _copyRoomCode(),
                     ),
                   ),
                   if (isCompact) ...[
@@ -389,8 +404,8 @@ class SimpleModeScreen extends GetView<SimpleModeController> {
               // --- PLAYER ROSTER ---
               Expanded(flex: 3, child: _buildPlayerRoster()),
 
-              // --- ACTION LOG (Terminal) ---
-              Expanded(flex: 2, child: _buildActionLog()),
+              // --- LOG FEED (Terminal) ---
+              Expanded(flex: 2, child: _buildFeedLog()),
             ],
           ],
         );
@@ -484,8 +499,12 @@ class SimpleModeScreen extends GetView<SimpleModeController> {
     );
   }
 
-  // --- ACTION LOG (Terminal) ---
-  Widget _buildActionLog({bool fullBorder = false}) {
+  // --- LOG FEED (Terminal) ---
+  // Kills and players dropping out only. The server still sends every action
+  // and the controller still keeps them all -- see
+  // `SimpleModeController.actionLogList` -- the per-bomb and laser chatter
+  // just isn't noise on screen.
+  Widget _buildFeedLog({bool fullBorder = false}) {
     return Container(
       decoration: BoxDecoration(
         color: Colors.black,
@@ -495,13 +514,25 @@ class SimpleModeScreen extends GetView<SimpleModeController> {
       ),
       padding: const EdgeInsets.all(8),
       child: GetBuilder<SimpleModeController>(
-        id: SimpleModeIds.actionLogPanel,
+        id: SimpleModeIds.feedLogPanel,
         builder: (ctl) {
+          if (ctl.feedLogList.isEmpty) {
+            // A waiting terminal rather than a message: same green '> ' every
+            // entry leads with, just with nothing after it yet.
+            return const Padding(
+              padding: EdgeInsets.only(bottom: 8.0),
+              child: Text(
+                '> ',
+                style: TextStyle(color: retroGreen, fontSize: 12, height: 1.5),
+              ),
+            );
+          }
+
           return ListView.builder(
             controller: ctl.logScrollController,
-            itemCount: ctl.actionLogList.length,
+            itemCount: ctl.feedLogList.length,
             itemBuilder: (context, index) {
-              return _buildLogEntry(ctl.actionLogList[index]);
+              return _buildLogEntry(ctl.feedLogList[index]);
             },
           );
         },
@@ -509,7 +540,7 @@ class SimpleModeScreen extends GetView<SimpleModeController> {
     );
   }
 
-  // --- Opens the roster + action log in a bottom sheet (short-screen mode) ---
+  // --- Opens the roster + log feed in a bottom sheet (short-screen mode) ---
   void _openRosterAndLogSheet() {
     Get.bottomSheet(
       ConstrainedBox(
@@ -530,7 +561,7 @@ class SimpleModeScreen extends GetView<SimpleModeController> {
                 ),
                 const SizedBox(height: 8),
                 Expanded(flex: 3, child: _buildPlayerRoster()),
-                Expanded(flex: 2, child: _buildActionLog(fullBorder: true)),
+                Expanded(flex: 2, child: _buildFeedLog(fullBorder: true)),
               ],
             ),
           ),
@@ -848,7 +879,9 @@ class SimpleModeScreen extends GetView<SimpleModeController> {
     return const SizedBox(width: 24, height: 24);
   }
 
-  // --- ACTION LOG FORMATTER ---
+  // --- LOG FORMATTER ---
+  // Handles every log type, including the ones the feed filters out, so a
+  // future full-history view can reuse it as-is.
   Widget _buildLogEntry(ActionLogEntity log) {
     String prefix = '';
     Color prefixColor = Colors.white;
@@ -883,10 +916,12 @@ class SimpleModeScreen extends GetView<SimpleModeController> {
           break;
         case LogActionType.playerEliminated:
           final data = log.getLogPlayerEliminatedData();
-          prefix = '[KILL]';
-          prefixColor = retroRed;
+          // Bomber, tag, victim. The prefix slot stays empty for this one --
+          // the tag sits between the two names instead of ahead of the line.
           messageSpans = [
-            TextSpan(text: ' ${data.victimName} eliminated by ${data.bomberName}!'),
+            TextSpan(text: data.bomberName),
+            const TextSpan(text: ' [KILL] ', style: TextStyle(color: retroRed)),
+            TextSpan(text: data.victimName),
           ];
           break;
         case LogActionType.orbitalLaserFired:
@@ -911,6 +946,14 @@ class SimpleModeScreen extends GetView<SimpleModeController> {
           prefixColor = Colors.grey;
           messageSpans = [
             TextSpan(text: ' ${data.playerName} lost connection.'),
+          ];
+          break;
+        case LogActionType.playerReconnected:
+          final data = log.getLogPlayerReconnectedData();
+          prefix = '[BACK]';
+          prefixColor = retroGreen;
+          messageSpans = [
+            TextSpan(text: ' ${data.playerName} is back online.'),
           ];
           break;
         case LogActionType.playerLeft:
@@ -1111,7 +1154,7 @@ class SimpleModeScreen extends GetView<SimpleModeController> {
     final startY = anim.y * tileSize;
     final targetY = startY - (tileSize * 1.5);
     final iconSize = tileSize * (32 / 60);
-    final name = anim.playerName;
+    final names = anim.playerNames;
     // Gap between the skull and its name tag.
     final labelOffset = (tileSize + iconSize) / 2 + 2;
     // On the top row there is no room above the skull (it floats off the
@@ -1142,7 +1185,7 @@ class SimpleModeScreen extends GetView<SimpleModeController> {
                   width: iconSize,
                   height: iconSize,
                 ),
-                if (name != null && name.isNotEmpty)
+                if (names.isNotEmpty)
                   Positioned(
                     top: labelAbove ? null : labelOffset,
                     bottom: labelAbove ? labelOffset : null,
@@ -1150,10 +1193,12 @@ class SimpleModeScreen extends GetView<SimpleModeController> {
                     // names stay readable instead of being squeezed.
                     left: -tileSize,
                     right: -tileSize,
+                    // One line per victim: a multi-kill is one skull with a
+                    // stacked name tag, not one skull per name.
                     child: Text(
-                      name,
+                      names.join('\n'),
                       textAlign: TextAlign.center,
-                      maxLines: 1,
+                      maxLines: names.length,
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(
                         color: retroRed,

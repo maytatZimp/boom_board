@@ -46,6 +46,14 @@ class ActionLogEntity {
     }
   }
 
+  LogPlayerReconnectedData getLogPlayerReconnectedData() {
+    if (type == LogActionType.playerReconnected) {
+      return LogPlayerReconnectedData.fromJson(data);
+    } else {
+      throw Exception('Log data ($type) is not type ${LogActionType.playerReconnected}');
+    }
+  }
+
   LogPlayerLeftData getLogPlayerLeftData() {
     if (type == LogActionType.playerLeft) {
       return LogPlayerLeftData.fromJson(data);
@@ -128,6 +136,18 @@ class LogPlayerDisconnectedData {
 
   static LogPlayerDisconnectedData fromJson(Map<String, dynamic> json) {
     return LogPlayerDisconnectedData(playerName: json['playerName']);
+  }
+}
+
+/// The other half of a disconnect: the same player is answering for themselves
+/// again. Same payload as the disconnect it closes.
+class LogPlayerReconnectedData {
+  final String playerName;
+
+  LogPlayerReconnectedData({required this.playerName});
+
+  static LogPlayerReconnectedData fromJson(Map<String, dynamic> json) {
+    return LogPlayerReconnectedData(playerName: json['playerName']);
   }
 }
 

@@ -16,6 +16,7 @@ import 'package:boom_board/core/events/models/socket_disconnected_event.dart';
 import 'package:boom_board/core/events/models/socket_reconnect_attempt_event.dart';
 import 'package:boom_board/core/exceptions/bb_server_exception.dart';
 import 'package:boom_board/features/simple_mode/data/models/enum/game_state.dart';
+import 'package:boom_board/features/simple_mode/data/models/enum/log_action_type.dart';
 import 'package:boom_board/features/simple_mode/domain/constants/animation_constant.dart' as anim_constant;
 import 'package:boom_board/features/simple_mode/domain/entities/action_log_entity.dart';
 import 'package:boom_board/features/simple_mode/domain/entities/animation/active_bomb_drop_entity.dart';
@@ -35,6 +36,7 @@ import 'package:boom_board/features/simple_mode/domain/entities/events/player_re
 import 'package:boom_board/features/simple_mode/domain/entities/events/room_snapshot_event.dart';
 import 'package:boom_board/features/simple_mode/domain/entities/events/round_resolved_event.dart';
 import 'package:boom_board/features/simple_mode/domain/entities/events/spectator_changed_event.dart';
+import 'package:boom_board/features/simple_mode/domain/entities/explosion_result_entity.dart';
 import 'package:boom_board/features/simple_mode/domain/entities/simple_mode_player_entity.dart';
 import 'package:boom_board/features/simple_mode/domain/entities/simple_mode_result_entity.dart';
 import 'package:boom_board/features/simple_mode/domain/use_cases/consume_room_snapshot_use_case.dart';
@@ -52,7 +54,7 @@ import 'package:logger/logger.dart';
 
 abstract class SimpleModeIds {
   static const String playerListPanel = 'PLAYER_LIST_PANEL';
-  static const String actionLogPanel = 'ACTION_LOG_PANEL';
+  static const String feedLogPanel = 'FEED_LOG_PANEL';
   static const String boardPanel = 'BOARD_PANEL';
   static const String controlPanel = 'CONTROL_PANEL';
   static const String connectionOverlay = 'CONNECTION_OVERLAY';
@@ -90,7 +92,22 @@ class SimpleModeController extends GetxController {
   // sequence left mid-flight by a background cannot overwrite the snapshot
   // that superseded it.
   int _roundAnimationGeneration = 0;
+  // Animation ids used to be minted from the wall clock, which only held up
+  // because every trigger in the round sequence sat behind an await.
+  // `triggerLaserAnimation` mints a whole burst inside one synchronous loop,
+  // where the clock never ticks -- those ids stayed distinct only because the
+  // coordinates baked into them did. A counter is unique by construction, so
+  // widget keys no longer depend on where the id happens to be minted.
+  int _animationIdCounter = 0;
+  /// Every log the server has sent for this game. Nothing on screen reads
+  /// it -- it is the round's full record, kept for a history/replay view
+  /// later. Only [feedLogList] is shown.
   List<ActionLogEntity> actionLogList = [];
+
+  /// What the player actually reads, in the order it happened: kills, plus
+  /// the two ways a player drops out of the game. The chatter -- every bomb
+  /// that missed, every laser sweep -- stays in [actionLogList] only.
+  List<ActionLogEntity> feedLogList = [];
   List<Coordinate> destroyedTile = [];
   Coordinate? hoveredTile;
   Coordinate? lockedBombTarget;
@@ -344,6 +361,7 @@ class SimpleModeController extends GetxController {
 
   void resetRound() {
     actionLogList = [];
+    feedLogList = [];
     destroyedTile = [];
     finalRanking = [];
     showEndgameOverlay = true;
@@ -495,8 +513,8 @@ class SimpleModeController extends GetxController {
     // it raw would blank our own avatar off the board every time anyone left.
     _applyServerPlayerList(event.playerList);
     hostId = event.newHostId;
-    actionLogList.addAll(event.newLogs);
-    update([SimpleModeIds.playerListPanel, SimpleModeIds.actionLogPanel, SimpleModeIds.controlPanel]);
+    _recordLogs(event.newLogs);
+    update([SimpleModeIds.playerListPanel, SimpleModeIds.feedLogPanel, SimpleModeIds.controlPanel]);
 
     if (event.newLogs.isNotEmpty) _scrollToBottom();
   }
@@ -527,8 +545,8 @@ class SimpleModeController extends GetxController {
     // at winning -- the roster just shows them as offline.
     _applyServerPlayerList(event.playerList);
     hostId = event.newHostId;
-    actionLogList.addAll(event.newLogs);
-    update([SimpleModeIds.playerListPanel, SimpleModeIds.actionLogPanel, SimpleModeIds.controlPanel]);
+    _recordLogs(event.newLogs);
+    update([SimpleModeIds.playerListPanel, SimpleModeIds.feedLogPanel, SimpleModeIds.controlPanel]);
 
     _scrollToBottom();
   }
@@ -536,7 +554,10 @@ class SimpleModeController extends GetxController {
   void onPlayerReconnectedEventReceived(PlayerReconnectedEvent event) {
     logger.d('onPlayerReconnectedEventReceived called with $event');
     _applyServerPlayerList(event.playerList);
-    update([SimpleModeIds.playerListPanel, SimpleModeIds.controlPanel]);
+    _recordLogs(event.newLogs);
+    update([SimpleModeIds.playerListPanel, SimpleModeIds.feedLogPanel, SimpleModeIds.controlPanel]);
+
+    if (event.newLogs.isNotEmpty) _scrollToBottom();
   }
 
   void onPlayerRenamedEventReceived(PlayerRenamedEvent event) {
@@ -589,6 +610,7 @@ class SimpleModeController extends GetxController {
     // The snapshot carries the current round's logs, so replace rather than
     // append -- appending would duplicate whatever we already saw this round.
     actionLogList = event.logs;
+    feedLogList = event.logs.where(_isFeedLog).toList();
     finalRanking = event.ranking;
     winnerPosition = event.winnerPosition;
     showEndgameOverlay = event.state == GameState.end;
@@ -636,7 +658,7 @@ class SimpleModeController extends GetxController {
 
     update([
       SimpleModeIds.playerListPanel,
-      SimpleModeIds.actionLogPanel,
+      SimpleModeIds.feedLogPanel,
       SimpleModeIds.boardPanel,
       SimpleModeIds.controlPanel,
       SimpleModeIds.connectionOverlay,
@@ -693,49 +715,62 @@ class SimpleModeController extends GetxController {
     int? localPlayerX = localPlayer?.x;
     int? localPlayerY = localPlayer?.y;
     // SEQUENTIAL EXPLOSION LOGIC
-    // Even in a temporary UI, we use async/await inside a loop to process them one-by-one
-    for (var explosion in event.explosionList) {
-      // NOTE: When you build the real UI, this is where you trigger the
-      // visual bomb explosion animation on the specific grid coordinates (explosion.x, explosion.y)
+    // One iteration per bomb thrown, not per victim -- see `_groupByBomb`. The
+    // awaits inside keep the round playing out one bomb at a time.
+    for (final hits in _groupByBomb(event.explosionList)) {
+      // Every entry in the group shares the bomber and the target tile.
+      final bomb = hits.first;
 
       int startX = -1;
       int startY = -1;
 
-      if (explosion.bomberId == localPlayerId) {
+      if (bomb.bomberId == localPlayerId) {
         startX = localPlayerX ?? -1;
         startY = localPlayerY ?? -1;
       }
       triggerBombAnimation(
-        explosion.bomberId,
+        bomb.bomberId,
         startX,
         startY,
-        explosion.x,
-        explosion.y,
+        bomb.x,
+        bomb.y,
       );
 
       // Wait for the "animation" to finish before evaluating the result
       await Future.delayed(anim_constant.bombDrop);
       if (generation != _roundAnimationGeneration) return;
 
-      if (explosion.bomberId == localPlayerId) {
+      if (bomb.bomberId == localPlayerId) {
         lockedBombTarget = null;
       }
 
-      triggerExplosionEffect(explosion.x, explosion.y);
+      triggerExplosionEffect(bomb.x, bomb.y);
 
-      if (explosion.isHit && explosion.victimId != null) {
+      // Everyone this one bomb killed, in the order the server resolved them.
+      final victimNames = <String>[];
+      for (final hit in hits) {
+        if (!hit.isHit || hit.victimId == null) continue;
+
         // Update the victim's status in real-time
-        final victimIndex = playerList.indexWhere((p) => p.id == explosion.victimId);
+        final victimIndex = playerList.indexWhere((p) => p.id == hit.victimId);
         if (victimIndex != -1) {
           playerList[victimIndex] = playerList[victimIndex].copyWith(isAlive: false);
-          update([SimpleModeIds.playerListPanel]);
-
-          triggerDeathAnimation(
-            explosion.x,
-            explosion.y,
-            playerName: playerList[victimIndex].name,
-          );
+          victimNames.add(playerList[victimIndex].name);
         }
+
+        // The kill line lands with the explosion that caused it. Waiting for
+        // the tail of this handler would dump every kill of the round on the
+        // player at once, seconds after the board already showed them.
+        _showKillLogFor(event.newLogs, hit.victimId!);
+      }
+
+      if (victimNames.isNotEmpty) {
+        update([SimpleModeIds.playerListPanel]);
+
+        // One skull for the tile, carrying every name. They all died on the
+        // same tile -- a ghost each would draw them exactly on top of one
+        // another, and the name tags would overprint into nothing legible.
+        triggerDeathAnimation(bomb.x, bomb.y, playerNames: victimNames);
       }
 
       await Future.delayed(anim_constant.explosionSettle);
@@ -768,10 +803,10 @@ class SimpleModeController extends GetxController {
         y: localPlayerY,
       );
     }
-    actionLogList.addAll(event.newLogs);
+    _recordLogs(event.newLogs);
 
     currentRound = event.roundNumber;
-    update([SimpleModeIds.playerListPanel, SimpleModeIds.actionLogPanel, SimpleModeIds.controlPanel]);
+    update([SimpleModeIds.playerListPanel, SimpleModeIds.feedLogPanel, SimpleModeIds.controlPanel]);
 
     _scrollToBottom();
   }
@@ -801,7 +836,7 @@ class SimpleModeController extends GetxController {
       SimpleModeIds.controlPanel,
       SimpleModeIds.playerListPanel,
       SimpleModeIds.boardPanel,
-      SimpleModeIds.actionLogPanel,
+      SimpleModeIds.feedLogPanel,
     ]);
   }
 
@@ -953,6 +988,89 @@ class SimpleModeController extends GetxController {
     update([SimpleModeIds.boardPanel]);
   }
 
+  /// Splits a round's explosion list into one entry per bomb thrown.
+  ///
+  /// The server reports a hit per victim, so a bomb that lands on a tile two
+  /// players are sharing arrives as two entries with the same bomber and the
+  /// same coordinates. Animating each as its own throw drew two bombs falling
+  /// on one tile, flashed the explosion twice, and stretched the round by a
+  /// full bomb per extra kill.
+  ///
+  /// Grouped on consecutive runs rather than by bomber, so the round's order
+  /// survives even if a later mode lets a player throw more than once.
+  List<List<ExplosionResultEntity>> _groupByBomb(List<ExplosionResultEntity> explosions) {
+    final List<List<ExplosionResultEntity>> groups = [];
+
+    for (final explosion in explosions) {
+      final current = groups.isEmpty ? null : groups.last;
+      final isSameBomb = current != null &&
+          current.first.bomberId == explosion.bomberId &&
+          current.first.x == explosion.x &&
+          current.first.y == explosion.y;
+
+      if (isSameBomb) {
+        current.add(explosion);
+      } else {
+        groups.add([explosion]);
+      }
+    }
+
+    return groups;
+  }
+
+  /// Which log types earn a line on screen. See [feedLogList].
+  bool _isFeedLog(ActionLogEntity log) =>
+      log.type == LogActionType.playerEliminated ||
+      log.type == LogActionType.playerDisconnected ||
+      log.type == LogActionType.playerReconnected ||
+      log.type == LogActionType.playerLeft;
+
+  bool _isKillLog(ActionLogEntity log) => log.type == LogActionType.playerEliminated;
+
+  /// Keeps the full server log, and mirrors the lines worth showing into the
+  /// feed the player reads. Kills already shown mid-animation are skipped, so
+  /// calling this with a whole round's logs is safe.
+  ///
+  /// Paints nothing: every caller is a handler that already updates the feed
+  /// panel and scrolls once it has applied the rest of the event, so doing it
+  /// per log here would just queue the same repaint and scroll N times over.
+  void _recordLogs(List<ActionLogEntity> logs) {
+    actionLogList.addAll(logs);
+    for (final log in logs) {
+      if (_isFeedLog(log)) _appendFeedLog(log);
+    }
+  }
+
+  /// Shows the kill line for one victim out of the round's logs.
+  ///
+  /// Matched on the raw payload rather than the typed accessor on purpose:
+  /// this runs mid-animation, and a malformed log must not be able to throw
+  /// the round sequence off the rails. Anything missed here still gets picked
+  /// up by [_recordLogs] at the end of the round.
+  void _showKillLogFor(List<ActionLogEntity> roundLogs, String victimId) {
+    for (final log in roundLogs) {
+      if (_isKillLog(log) && log.data['victimId'] == victimId) {
+        // The one caller that has to paint for itself: this lands mid-round,
+        // seconds before the handler's own update at the end of the sequence,
+        // and the whole point is that the line shows with its explosion.
+        if (_appendFeedLog(log)) {
+          update([SimpleModeIds.feedLogPanel]);
+          _scrollToBottom();
+        }
+        return;
+      }
+    }
+  }
+
+  /// Adds a line to the feed if it isn't already there, and reports whether it
+  /// actually landed -- a kill shown mid-animation is skipped when the round's
+  /// full log arrives behind it.
+  bool _appendFeedLog(ActionLogEntity log) {
+    if (feedLogList.any((e) => e.id == log.id)) return false;
+    feedLogList.add(log);
+    return true;
+  }
+
   void _scrollToBottom() {
     // We use addPostFrameCallback because we need to wait for Flutter to
     // actually build the new log text widgets before we can scroll past them!
@@ -982,7 +1100,7 @@ class SimpleModeController extends GetxController {
   // Helper to trigger the animation
   void triggerBombAnimation(String bomberId, int startX, int startY, int targetX, int targetY) {
     final drop = ActiveBombDropEntity(
-      id: DateTime.now().millisecondsSinceEpoch.toString() + bomberId,
+      id: '${bomberId}_${_animationIdCounter++}',
       bomberId: bomberId,
       startX: startX,
       startY: startY,
@@ -1001,7 +1119,7 @@ class SimpleModeController extends GetxController {
   }
 
   void triggerExplosionEffect(int x, int y) {
-    final id = 'exp_${x}_${y}_${DateTime.now().millisecondsSinceEpoch}';
+    final id = 'exp_${x}_${y}_${_animationIdCounter++}';
     activeExplosions.add(ActiveTileAnimationEntity(id: id, x: x, y: y));
     update([SimpleModeIds.boardPanel]);
 
@@ -1012,9 +1130,9 @@ class SimpleModeController extends GetxController {
     });
   }
 
-  void triggerDeathAnimation(int x, int y, {String? playerName}) {
-    final id = 'death_${x}_${y}_${DateTime.now().millisecondsSinceEpoch}';
-    activeDeaths.add(ActiveTileAnimationEntity(id: id, x: x, y: y, playerName: playerName));
+  void triggerDeathAnimation(int x, int y, {List<String> playerNames = const []}) {
+    final id = 'death_${x}_${y}_${_animationIdCounter++}';
+    activeDeaths.add(ActiveTileAnimationEntity(id: id, x: x, y: y, playerNames: playerNames));
     update([SimpleModeIds.boardPanel]);
 
     // Delay for the animation duration. When it finishes, we remove the ghost!
@@ -1026,7 +1144,7 @@ class SimpleModeController extends GetxController {
 
   void triggerLaserAnimation(List<Coordinate> tiles) {
     for (var tile in tiles) {
-      final id = 'laser_${tile.x}_${tile.y}_${DateTime.now().millisecondsSinceEpoch}';
+      final id = 'laser_${tile.x}_${tile.y}_${_animationIdCounter++}';
       activeLasers.add(ActiveTileAnimationEntity(id: id, x: tile.x, y: tile.y));
     }
     update([SimpleModeIds.boardPanel]);

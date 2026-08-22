@@ -5,6 +5,7 @@ enum LogActionType {
   playerEliminated,
   orbitalLaserFired,
   playerDisconnected,
+  playerReconnected,
   playerLeft
   ;
 
@@ -18,6 +19,8 @@ enum LogActionType {
         return orbitalLaserFired;
       case 'PLAYER_DISCONNECTED':
         return playerDisconnected;
+      case 'PLAYER_RECONNECTED':
+        return playerReconnected;
       case 'PLAYER_LEFT':
         return playerLeft;
       default:
@@ -36,6 +39,8 @@ enum LogActionType {
         return 'ORBITAL_LASER_FIRED';
       case playerDisconnected:
         return 'PLAYER_DISCONNECTED';
+      case playerReconnected:
+        return 'PLAYER_RECONNECTED';
       case playerLeft:
         return 'PLAYER_LEFT';
     }

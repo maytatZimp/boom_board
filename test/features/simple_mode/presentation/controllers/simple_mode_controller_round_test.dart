@@ -21,6 +21,20 @@ ActionLogEntity log(String id) {
   );
 }
 
+ActionLogEntity killLog(String id, String victimId) {
+  return ActionLogEntity(
+    id: id,
+    type: LogActionType.playerEliminated,
+    timestamp: DateTime.fromMillisecondsSinceEpoch(0),
+    data: <String, dynamic>{
+      'bomberName': 'Bomber',
+      'bomberId': localId,
+      'victimName': victimId,
+      'victimId': victimId,
+    },
+  );
+}
+
 ExplosionResultEntity explosion({
   required String bomberId,
   String? victimId,
@@ -155,6 +169,153 @@ void main() {
       });
 
       expect(harness.playerById('p-2').isAlive, isFalse);
+    });
+
+    test('a bomb that kills two players is thrown once', () async {
+      // The server reports one hit per victim, so a bomb landing on a shared
+      // tile arrives as two entries with the same bomber and coordinates.
+      // Those are one throw, not two.
+      await buildRoom(localX: 1, localY: 1);
+      // Both victims sharing the tile the bomb lands on.
+      harness.controller.playerList = [
+        player(id: localId, x: 1, y: 1),
+        player(id: 'p-2', x: 5, y: 5),
+        player(id: 'p-3', x: 5, y: 5),
+      ];
+
+      fakeAsync((async) {
+        harness.controller.onRoundResolvedEventReceived(
+          roundEvent(
+            explosions: [
+              explosion(bomberId: localId, victimId: 'p-2', isHit: true, x: 5, y: 5),
+              explosion(bomberId: localId, victimId: 'p-3', isHit: true, x: 5, y: 5),
+            ],
+            players: [
+              player(id: localId),
+              player(id: 'p-2', isAlive: false),
+              player(id: 'p-3', isAlive: false),
+            ],
+          ),
+        );
+
+        async.flushMicrotasks();
+        expect(harness.controller.activeBombDrops, hasLength(1));
+
+        async.elapse(anim.bombDrop);
+        expect(harness.controller.activeExplosions, hasLength(1));
+        // One skull for the tile, both names on it.
+        expect(harness.controller.activeDeaths, hasLength(1));
+        expect(harness.controller.activeDeaths.single.playerNames, ['p-2', 'p-3']);
+
+        // A single bomb's worth of time, so a double kill does not stretch
+        // the round by an extra throw.
+        async.elapse(anim.explosionSettle);
+        expect(harness.controller.activeBombDrops, isEmpty);
+
+        async.elapse(settle);
+      });
+
+      expect(harness.playerById('p-2').isAlive, isFalse);
+      expect(harness.playerById('p-3').isAlive, isFalse);
+    });
+
+    test('both victims of one bomb get their own kill line', () async {
+      await buildRoom(localX: 1, localY: 1);
+
+      fakeAsync((async) {
+        harness.controller.onRoundResolvedEventReceived(
+          roundEvent(
+            explosions: [
+              explosion(bomberId: localId, victimId: 'p-2', isHit: true, x: 5, y: 5),
+              explosion(bomberId: localId, victimId: 'p-3', isHit: true, x: 5, y: 5),
+            ],
+            players: [
+              player(id: localId),
+              player(id: 'p-2', isAlive: false),
+              player(id: 'p-3', isAlive: false),
+            ],
+            newLogs: [killLog('kill-1', 'p-2'), killLog('kill-2', 'p-3')],
+          ),
+        );
+        async.elapse(settle);
+      });
+
+      expect(harness.controller.feedLogList.map((l) => l.id), ['kill-1', 'kill-2']);
+    });
+
+    test('two bombers on the same tile are still two throws', () async {
+      // Same coordinates, different bombers -- reachable when the first bomb
+      // misses. Grouping must not fold these into one.
+      await buildRoom(localX: 1, localY: 1);
+
+      fakeAsync((async) {
+        harness.controller.onRoundResolvedEventReceived(
+          roundEvent(
+            explosions: [
+              explosion(bomberId: localId, x: 5, y: 5),
+              explosion(bomberId: 'p-2', x: 5, y: 5),
+            ],
+            players: [player(id: localId), player(id: 'p-2')],
+          ),
+        );
+
+        async.flushMicrotasks();
+        expect(harness.controller.activeBombDrops.single.bomberId, localId);
+
+        async.elapse(anim.bombDrop + anim.explosionSettle);
+        expect(harness.controller.activeBombDrops.single.bomberId, 'p-2');
+
+        async.elapse(settle);
+      });
+    });
+
+    test('shows the kill line with the explosion, not at the end of the round', () async {
+      // The whole point of splitting the feed off the raw log: a kill has to
+      // read on screen while its own explosion is still playing, not arrive
+      // with every other kill once the last bomb has landed.
+      await buildRoom(localX: 1, localY: 1);
+
+      fakeAsync((async) {
+        harness.controller.onRoundResolvedEventReceived(
+          roundEvent(
+            explosions: [
+              explosion(bomberId: localId, victimId: 'p-2', isHit: true, x: 5, y: 5),
+              explosion(bomberId: 'p-2', x: 7, y: 7),
+            ],
+            players: [player(id: localId), player(id: 'p-2', isAlive: false)],
+            newLogs: [log('bomb-1'), killLog('kill-1', 'p-2'), log('bomb-2')],
+          ),
+        );
+
+        // First bomb has landed; the second has not been thrown yet.
+        async.elapse(anim.bombDrop);
+        expect(harness.controller.feedLogList.map((l) => l.id), ['kill-1']);
+        // The full record is still written in one go at the end of the round.
+        expect(harness.controller.actionLogList, isEmpty);
+
+        async.elapse(settle);
+      });
+    });
+
+    test('keeps every log but feeds only the kill line', () async {
+      await buildRoom(localX: 1, localY: 1);
+
+      fakeAsync((async) {
+        harness.controller.onRoundResolvedEventReceived(
+          roundEvent(
+            explosions: [
+              explosion(bomberId: localId, victimId: 'p-2', isHit: true, x: 5, y: 5),
+            ],
+            players: [player(id: localId), player(id: 'p-2', isAlive: false)],
+            newLogs: [log('bomb-1'), killLog('kill-1', 'p-2')],
+          ),
+        );
+        async.elapse(settle);
+      });
+
+      expect(harness.controller.actionLogList.map((l) => l.id), ['bomb-1', 'kill-1']);
+      // Recorded once, not again by the tail of the handler.
+      expect(harness.controller.feedLogList.map((l) => l.id), ['kill-1']);
     });
 
     test('unlocks the local bomb target once its bomb lands', () async {
@@ -383,10 +544,12 @@ void main() {
 
       fakeAsync((async) {
         harness.controller.triggerDeathAnimation(2, 2);
-        async.elapse(const Duration(milliseconds: 750));
+        async.elapse(anim.deathGhost ~/ 2);
         harness.controller.triggerDeathAnimation(2, 2);
 
-        async.elapse(const Duration(milliseconds: 750));
+        // Removal is keyed on the tile, not the animation, so the first
+        // ghost's timer takes the second one with it half-way through.
+        async.elapse(anim.deathGhost ~/ 2);
         expect(harness.controller.activeDeaths, isEmpty);
       });
     });

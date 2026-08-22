@@ -35,6 +35,15 @@ ActionLogEntity log(String id) {
   );
 }
 
+ActionLogEntity playerLog(String id, LogActionType type, String playerName) {
+  return ActionLogEntity(
+    id: id,
+    type: type,
+    timestamp: DateTime.fromMillisecondsSinceEpoch(0),
+    data: <String, dynamic>{'playerName': playerName},
+  );
+}
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
@@ -298,10 +307,40 @@ void main() {
         PlayerReconnectedEvent(
           playerId: 'p-2',
           playerList: [player(id: localId), player(id: 'p-2')],
+          newLogs: const [],
         ),
       );
 
       expect(harness.playerById('p-2').isDisconnected, isFalse);
+    });
+
+    test('records the reconnect line so the log closes the disconnect', () async {
+      await buildRoom();
+
+      harness.controller.onPlayerReconnectedEventReceived(
+        PlayerReconnectedEvent(
+          playerId: 'p-2',
+          playerList: [player(id: localId), player(id: 'p-2')],
+          newLogs: [playerLog('rc-1', LogActionType.playerReconnected, 'Bob')],
+        ),
+      );
+
+      expect(harness.controller.actionLogList.single.id, 'rc-1');
+      expect(harness.controller.feedLogList.single.id, 'rc-1');
+    });
+
+    test('a rejoin over a live socket carries no log and adds no line', () async {
+      await buildRoom();
+
+      harness.controller.onPlayerReconnectedEventReceived(
+        PlayerReconnectedEvent(
+          playerId: 'p-2',
+          playerList: [player(id: localId), player(id: 'p-2')],
+          newLogs: const [],
+        ),
+      );
+
+      expect(harness.controller.feedLogList, isEmpty);
     });
   });
 
