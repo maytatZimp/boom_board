@@ -490,9 +490,15 @@ class SimpleModeController extends GetxController {
 
   void onPlayerLeftEventReceived(PlayerLeftEvent event) {
     logger.d('onPlayerLeftEventReceived called with $event');
-    playerList = event.playerList;
+    // Through `_applyServerPlayerList`, not a bare assignment: this now fires
+    // mid-game too, and the broadcast roster carries no positions -- so taking
+    // it raw would blank our own avatar off the board every time anyone left.
+    _applyServerPlayerList(event.playerList);
     hostId = event.newHostId;
-    update([SimpleModeIds.playerListPanel, SimpleModeIds.controlPanel]);
+    actionLogList.addAll(event.newLogs);
+    update([SimpleModeIds.playerListPanel, SimpleModeIds.actionLogPanel, SimpleModeIds.controlPanel]);
+
+    if (event.newLogs.isNotEmpty) _scrollToBottom();
   }
 
   void onPlayerReadyEventReceived(PlayerReadyEvent event) {
@@ -724,7 +730,11 @@ class SimpleModeController extends GetxController {
           playerList[victimIndex] = playerList[victimIndex].copyWith(isAlive: false);
           update([SimpleModeIds.playerListPanel]);
 
-          triggerDeathAnimation(explosion.x, explosion.y);
+          triggerDeathAnimation(
+            explosion.x,
+            explosion.y,
+            playerName: playerList[victimIndex].name,
+          );
         }
       }
 
@@ -1002,9 +1012,9 @@ class SimpleModeController extends GetxController {
     });
   }
 
-  void triggerDeathAnimation(int x, int y) {
+  void triggerDeathAnimation(int x, int y, {String? playerName}) {
     final id = 'death_${x}_${y}_${DateTime.now().millisecondsSinceEpoch}';
-    activeDeaths.add(ActiveTileAnimationEntity(id: id, x: x, y: y));
+    activeDeaths.add(ActiveTileAnimationEntity(id: id, x: x, y: y, playerName: playerName));
     update([SimpleModeIds.boardPanel]);
 
     // Delay for the animation duration. When it finishes, we remove the ghost!

@@ -1,6 +1,9 @@
 import 'package:boom_board/core/exceptions/bb_server_exception.dart';
 import 'package:boom_board/core/exceptions/invalid_socket_response_exception.dart';
 import 'package:boom_board/core/utils/socket_service.dart';
+import '../../helpers/mocks.dart';
+import 'package:boom_board/core/events/models/socket_connected_event.dart';
+import 'package:boom_board/core/events/event_bus.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import '../../helpers/fixtures.dart';
@@ -17,6 +20,97 @@ void main() {
   });
 
   tearDown(tearDownTestDependencies);
+
+  group('SocketService.connectToServer', () {
+    late List<FakeSocket> built;
+    late SocketService service;
+
+    setUp(() {
+      built = [];
+      service = SocketService(socketFactory: () {
+        final socket = FakeSocket();
+        built.add(socket);
+        return socket;
+      });
+    });
+
+    test('builds one socket, connects it, and binds each lifecycle listener once', () {
+      service.connectToServer();
+
+      expect(built, hasLength(1));
+      expect(built.single.connectCalls, 1);
+      expect(built.single.handlerCount('connect'), 1);
+      expect(built.single.handlerCount('connect_error'), 1);
+      expect(built.single.handlerCount('disconnect'), 1);
+      expect(built.single.fakeManager.handlerCount('reconnect_attempt'), 1);
+    });
+
+    test('never builds a second socket', () {
+      // The leak this guards. `io.io()` does not hand back the socket it
+      // already made for this host: `_lookup` sees the namespace is taken and
+      // treats the call as a request for a separate connection, returning a
+      // fresh Manager and Socket. Reassigning `socket` to it would abandon the
+      // old one -- still listening, still reconnecting on its own -- as a second
+      // connection the app can neither see nor close, firing a duplicate set of
+      // bus events and holding a second seat on the server.
+      service.connectToServer();
+      final first = built.single;
+
+      first.connected = true;
+      service.connectToServer();
+
+      first.connected = false;
+      service.connectToServer();
+
+      expect(built, hasLength(1));
+      expect(service.socket, same(first));
+      expect(first.handlerCount('connect'), 1);
+      expect(first.fakeManager.handlerCount('reconnect_attempt'), 1);
+    });
+
+    test('re-announces an existing connection so a late caller is not left waiting', () async {
+      // HomeController flips `isConnecting` on and waits for the bus. Coming
+      // back to the home screen with the socket already up fires no fresh
+      // `connect`, so without this the panel would spin forever.
+      service.connectToServer();
+      built.single.connected = true;
+
+      var announced = 0;
+      eventBus.on<SocketConnectedEvent>().listen((_) => announced++);
+
+      service.connectToServer();
+      await pumpEventBus();
+
+      expect(announced, 1);
+      expect(built.single.connectCalls, 1);
+    });
+
+    test('nudges the existing socket when it is down instead of announcing', () async {
+      service.connectToServer();
+      built.single.connected = false;
+
+      var announced = 0;
+      eventBus.on<SocketConnectedEvent>().listen((_) => announced++);
+
+      service.connectToServer();
+      await pumpEventBus();
+
+      expect(built.single.connectCalls, 2);
+      expect(announced, 0, reason: 'the socket is not up yet -- its own connect handler announces it');
+    });
+
+    test('the one bound connect handler announces the connection', () async {
+      service.connectToServer();
+
+      var announced = 0;
+      eventBus.on<SocketConnectedEvent>().listen((_) => announced++);
+
+      built.single.serverEmit('connect', null);
+      await pumpEventBus();
+
+      expect(announced, 1, reason: 'a duplicate registration would announce twice');
+    });
+  });
 
   group('SocketService.handleAckData', () {
     test('returns a SocketResponse for a 200 ack', () {

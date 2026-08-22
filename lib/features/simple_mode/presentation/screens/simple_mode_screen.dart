@@ -205,6 +205,13 @@ class SimpleModeScreen extends GetView<SimpleModeController> {
         onCancel: () => Get.back(),
         onConfirm: () {
           Get.back();
+          // Deliberately not awaited: a slow server would otherwise freeze the
+          // room screen behind a dialog the player has already dismissed. Safe
+          // in both directions -- LeaveRoomUseCase drops the credential slot,
+          // the parked snapshot and the handlers before it yields, so the home
+          // screen below cannot read stale ones; and the emit is queued on this
+          // socket ahead of whatever room the player enters next, so the server
+          // frees the seat before it hands out another.
           controller.leaveRoom();
           Get.offAllNamed(home);
         },
@@ -906,6 +913,14 @@ class SimpleModeScreen extends GetView<SimpleModeController> {
             TextSpan(text: ' ${data.playerName} lost connection.'),
           ];
           break;
+        case LogActionType.playerLeft:
+          final data = log.getLogPlayerLeftData();
+          prefix = '[LEFT]';
+          prefixColor = Colors.grey;
+          messageSpans = [
+            TextSpan(text: ' ${data.playerName} left the game.'),
+          ];
+          break;
       }
     } catch (e) {
       // Fallback just in case parsing fails
@@ -1096,6 +1111,12 @@ class SimpleModeScreen extends GetView<SimpleModeController> {
     final startY = anim.y * tileSize;
     final targetY = startY - (tileSize * 1.5);
     final iconSize = tileSize * (32 / 60);
+    final name = anim.playerName;
+    // Gap between the skull and its name tag.
+    final labelOffset = (tileSize + iconSize) / 2 + 2;
+    // On the top row there is no room above the skull (it floats off the
+    // board), so the name tag hangs underneath instead of getting clipped.
+    final labelAbove = anim.y > 0;
 
     return TweenAnimationBuilder<double>(
       key: ValueKey(anim.id),
@@ -1113,11 +1134,41 @@ class SimpleModeScreen extends GetView<SimpleModeController> {
           height: tileSize,
           child: Opacity(
             opacity: currentOpacity,
-            child: Center(
-              child: $AssetsImagesGen().deadIcon.image(
-                width: iconSize,
-                height: iconSize,
-              ),
+            child: Stack(
+              clipBehavior: Clip.none,
+              alignment: Alignment.center,
+              children: [
+                $AssetsImagesGen().deadIcon.image(
+                  width: iconSize,
+                  height: iconSize,
+                ),
+                if (name != null && name.isNotEmpty)
+                  Positioned(
+                    top: labelAbove ? null : labelOffset,
+                    bottom: labelAbove ? labelOffset : null,
+                    // Let the tag spill into the neighbouring tiles so longer
+                    // names stay readable instead of being squeezed.
+                    left: -tileSize,
+                    right: -tileSize,
+                    child: Text(
+                      name,
+                      textAlign: TextAlign.center,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: retroRed,
+                        fontSize: (tileSize * 0.22).clamp(9.0, 14.0),
+                        fontWeight: FontWeight.bold,
+                        shadows: const [
+                          Shadow(color: Colors.black, offset: Offset(1, 1)),
+                          Shadow(color: Colors.black, offset: Offset(-1, 1)),
+                          Shadow(color: Colors.black, offset: Offset(1, -1)),
+                          Shadow(color: Colors.black, offset: Offset(-1, -1)),
+                        ],
+                      ),
+                    ),
+                  ),
+              ],
             ),
           ),
         );

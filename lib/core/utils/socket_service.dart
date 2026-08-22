@@ -12,7 +12,27 @@ import 'package:get_it/get_it.dart';
 import 'package:logger/logger.dart';
 import 'package:socket_io_client/socket_io_client.dart' as io;
 
+/// Builds the app's one socket. Injectable so [SocketService.connectToServer]
+/// can be exercised without a server, and without reading `.env`.
+typedef SocketFactory = io.Socket Function();
+
+io.Socket _buildAppSocket() {
+  return io.io(
+    backendUrl,
+    io.OptionBuilder()
+        .setTransports(['websocket']) // Required for Flutter Web
+        .disableAutoConnect()
+        .setAckTimeout(5000)
+        .setReconnectionAttempts(5)
+        .build(),
+  );
+}
+
 class SocketService {
+  SocketService({SocketFactory? socketFactory}) : _socketFactory = socketFactory ?? _buildAppSocket;
+
+  final SocketFactory _socketFactory;
+
   late io.Socket socket;
   bool _isInitialized = false;
 
@@ -21,25 +41,36 @@ class SocketService {
   }
 
   void connectToServer() {
-    // If a live connection already exists (e.g. returning to the home screen
-    // after leaving a room), don't rebuild the socket. The underlying
-    // connection is still up, so a fresh `onConnect` would never fire and the
-    // caller would wait forever. Just re-announce the connected state.
-    if (_isInitialized && socket.connected) {
-      logger.d('Socket already connected, re-firing SocketConnectedEvent.');
-      eventBus.fire(SocketConnectedEvent());
+    // The socket is built exactly once per app run, and every listener below is
+    // bound to that one instance.
+    //
+    // Rebuilding it here would not reuse it. `io.io()` looks up its cache by
+    // host, finds the namespace already taken, and treats that as a request for
+    // a *separate* connection: a fresh Manager and a fresh Socket, neither of
+    // them cached (socket_io_client's `_lookup`, where `sameNamespace` forces
+    // `newConnection`). We would reassign `socket` to the new one and lose our
+    // only handle on the old -- which is still alive, still carrying the
+    // listeners below, and still running its own reconnection loop. It comes
+    // back as a second connection the app cannot see or close, firing a second
+    // set of events onto the bus and holding a second seat on the server.
+    //
+    // So a repeat call never rebuilds. There are only two useful things left to
+    // do: re-announce a connection the caller may have missed, and nudge a
+    // socket that is currently down. `Socket.connect()` is safe to call again --
+    // it re-opens a closed manager and its `subEvents()` is a no-op when the
+    // subscriptions are already in place.
+    if (_isInitialized) {
+      if (socket.connected) {
+        logger.d('Socket already connected, re-firing SocketConnectedEvent.');
+        eventBus.fire(SocketConnectedEvent());
+      } else {
+        logger.d('Socket exists but is down, reconnecting the existing one.');
+        socket.connect();
+      }
       return;
     }
 
-    socket = io.io(
-      backendUrl,
-      io.OptionBuilder()
-          .setTransports(['websocket']) // Required for Flutter Web
-          .disableAutoConnect()
-          .setAckTimeout(5000)
-          .setReconnectionAttempts(5)
-          .build(),
-    );
+    socket = _socketFactory();
 
     _isInitialized = true;
     socket.connect();

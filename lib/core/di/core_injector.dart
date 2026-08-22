@@ -9,6 +9,7 @@ import 'package:boom_board/core/domain/use_cases/join_room_use_case.dart';
 import 'package:boom_board/core/domain/use_cases/leave_room_use_case.dart';
 import 'package:boom_board/core/utils/logger.dart';
 import 'package:boom_board/core/utils/socket_service.dart';
+import 'package:boom_board/features/simple_mode/data/data_source/room_snapshot_cache.dart';
 import 'package:boom_board/features/simple_mode/data/data_source/simple_mode_socket_handler.dart';
 import 'package:boom_board/features/simple_mode/di/simple_mode_injection.dart';
 import 'package:get_it/get_it.dart';
@@ -73,6 +74,7 @@ void registerCoreFactoryDependencies() {
     () => LeaveRoomUseCase(
       roomServerRepository: GetIt.I<RoomServerRepository>(),
       simpleModeSocketHandler: GetIt.I<SimpleModeSocketHandler>(),
+      roomSnapshotCache: GetIt.I<RoomSnapshotCache>(),
       identityStore: GetIt.I<IdentityStore>(),
     ),
   );

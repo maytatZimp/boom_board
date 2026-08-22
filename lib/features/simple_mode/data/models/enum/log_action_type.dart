@@ -4,7 +4,8 @@ enum LogActionType {
   bombExploded,
   playerEliminated,
   orbitalLaserFired,
-  playerDisconnected
+  playerDisconnected,
+  playerLeft
   ;
 
   static LogActionType fromString(String value) {
@@ -17,6 +18,8 @@ enum LogActionType {
         return orbitalLaserFired;
       case 'PLAYER_DISCONNECTED':
         return playerDisconnected;
+      case 'PLAYER_LEFT':
+        return playerLeft;
       default:
         throw InvalidSocketResponseException();
     }
@@ -33,6 +36,8 @@ enum LogActionType {
         return 'ORBITAL_LASER_FIRED';
       case playerDisconnected:
         return 'PLAYER_DISCONNECTED';
+      case playerLeft:
+        return 'PLAYER_LEFT';
     }
   }
 }

@@ -25,6 +25,11 @@ import 'package:boom_board/features/simple_mode/domain/use_cases/start_game_use_
 import 'package:boom_board/features/simple_mode/domain/use_cases/throw_bomb_use_case.dart';
 import 'package:mocktail/mocktail.dart';
 import 'package:socket_io_client/socket_io_client.dart' as io;
+// `FakeSocket` overrides Socket's `io` field, which shadows the `io` prefix
+// inside its body -- so the type also has to be reachable unprefixed.
+import 'package:socket_io_client/socket_io_client.dart' show Socket;
+// ignore: implementation_imports
+import 'package:socket_io_client/src/manager.dart' as manager;
 
 // None of the collaborators below are abstract except the two repositories,
 // but mocktail can implement concrete classes, so no interface extraction is
@@ -69,6 +74,50 @@ class FakeSocket extends Mock implements io.Socket {
   }
 
   /// How many handlers are currently bound to [event].
+  int handlerCount(String event) => handlers[event]?.length ?? 0;
+
+  /// The socket's own connection flag, which `SocketService` branches on.
+  @override
+  bool connected = false;
+
+  int connectCalls = 0;
+
+  @override
+  Socket connect() {
+    connectCalls++;
+    return this;
+  }
+
+  /// `onReconnectAttempt` is the one lifecycle listener that registers on the
+  /// *manager* rather than the socket (`darty.dart` does `this.io.on(...)`), so
+  /// a fake socket has to hand one back or `connectToServer` throws on its
+  /// first call.
+  @override
+  manager.Manager get io => fakeManager;
+
+  final FakeManager fakeManager = FakeManager();
+}
+
+/// Stands in for the socket's manager. Only `on` is ever reached.
+///
+/// [manager.Manager] is not re-exported by `socket_io_client.dart`, hence the
+/// implementation import -- there is no public name for the type of
+/// `Socket.io`, and [FakeSocket] has to satisfy it.
+class FakeManager extends Mock implements manager.Manager {
+  final Map<String, List<dynamic Function(dynamic)>> handlers = {};
+
+  @override
+  Function() on(String event, dynamic Function(dynamic) handler) {
+    handlers.putIfAbsent(event, () => []).add(handler);
+    return () {};
+  }
+
+  void serverEmit(String event, dynamic data) {
+    for (final handler in List.of(handlers[event] ?? const [])) {
+      handler(data);
+    }
+  }
+
   int handlerCount(String event) => handlers[event]?.length ?? 0;
 }
 
